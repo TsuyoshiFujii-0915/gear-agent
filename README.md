@@ -3,13 +3,14 @@
 Gear Code は、Responses API 互換エンドポイントを使う最小構成の学習用コーディングエージェントです。
 Codex の中核動作を理解しやすい Python コードとして表現することを目的にしています。
 
-現在の実装は、対話型 CLI、モデル呼び出し、ツール実行、JSONL 形式のセッション保存、明示的な履歴コンパクションを備えています。
+現在の実装は、対話型 TUI、モデル呼び出し、ツール実行、JSONL 形式のセッション保存、明示的な履歴コンパクションを備えています。
 
 ## 特徴
 
-- Python 標準ライブラリ中心の小さな実装
+- モデル通信とツール実行は Python 標準ライブラリ中心の小さな実装
+- Textual による対話型 TUI
 - `uv` によるプロジェクト実行
-- `gear` コマンドによる対話型 CLI
+- `gear` コマンドによる起動
 - Responses API 互換の non-stream HTTP POST
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
@@ -48,8 +49,9 @@ uv run gear init --scope user
 
 ## 設定
 
-設定ファイルは、プロジェクトスコープの `.gear/config.toml` を優先して読み込みます。
-見つからない場合は `~/.gear/config.toml` を読み込みます。
+設定ファイルは、カレントディレクトリから親ディレクトリへ向かって
+プロジェクトスコープの `.gear/config.toml` を探索し、最初に見つかったものを読み込みます。
+見つからない場合はユーザースコープの `~/.gear/config.toml` を読み込みます。
 
 LM Studio など、API キーなしのローカル互換エンドポイントを使う例です。
 
@@ -178,6 +180,15 @@ max_content_chars = 20000
 `[web_fetch]` は必須です。`api_key_env` が指す環境変数に Tavily API キーが存在しない場合は、
 設定エラーとして起動時に失敗します。
 
+`[web_search]` の `search_depth` は `basic`、`advanced`、`fast`、`ultra-fast` のいずれかです。
+`max_results` は 1 以上 20 以下の整数です。
+`timeout_seconds` は 1 以上の整数です。
+
+`[web_fetch]` の `extract_depth` は `basic` または `advanced` です。
+`content_format` は `markdown` または `text` です。
+`timeout_seconds` と `max_content_chars` は 1 以上の整数です。
+各 Web 設定テーブルで未定義のキー、欠けているキー、型が合わない値は設定エラーとして起動時に失敗します。
+
 ## 使い方
 
 通常起動します。
@@ -233,8 +244,11 @@ Shell tool の Docker image はコード側で `python:3.11-slim` に固定し�
 |   `-- decisions/
 |-- src/
 |   `-- gear_code/
+|       |-- __init__.py
 |       |-- agent/
 |       |   |-- compaction.py
+|       |   |-- events.py
+|       |   |-- history.py
 |       |   `-- loop.py
 |       |-- cli.py
 |       |-- config.py
@@ -247,23 +261,26 @@ Shell tool の Docker image はコード側で `python:3.11-slim` に固定し�
 |       |   |-- base.py
 |       |   |-- jsonl.py
 |       |   `-- memory.py
-|       `-- tools/
-|           |-- base.py
-|           |-- filesystem.py
-|           |-- filesystem_search.py
-|           |-- patch.py
-|           |-- registry.py
-|           |-- runtimes.py
-|           |-- shell.py
-|           |-- web_fetch.py
-|           |-- web_search.py
-|           `-- validation.py
+|       |-- tools/
+|       |   |-- base.py
+|       |   |-- configured.py
+|       |   |-- filesystem.py
+|       |   |-- filesystem_search.py
+|       |   |-- patch.py
+|       |   |-- registry.py
+|       |   |-- runtimes.py
+|       |   |-- shell.py
+|       |   |-- web_fetch.py
+|       |   |-- web_search.py
+|       |   `-- validation.py
+|       |-- tui.py
+|       `-- tui_app.py
 |-- tests/
 |-- pyproject.toml
 `-- uv.lock
 ```
 
-`cli.py` と `config.py` は入口として読みやすいようにルートへ残し、
+`cli.py` と `config.py` は入口として読みやすいようにパッケージ直下へ残し、
 エージェント実行、モデル通信、ツール、保存処理は責務ごとに分けています。
 
 ## テスト
