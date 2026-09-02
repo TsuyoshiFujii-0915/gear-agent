@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from gear_code.store.base import ContextStore
+from gear_agent.store.base import ContextStore
 
 
 class JsonlContextStore(ContextStore):

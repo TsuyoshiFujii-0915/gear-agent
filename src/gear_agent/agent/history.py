@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 import json
 
-from gear_code.errors import gear_error
-from gear_code.model.responses import function_call_output_item
+from gear_agent.errors import gear_error
+from gear_agent.model.responses import function_call_output_item
 
 
 FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS = 12000

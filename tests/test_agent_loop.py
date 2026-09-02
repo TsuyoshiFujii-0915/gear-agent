@@ -1,21 +1,21 @@
 import unittest
 from typing import Any
 
-from gear_code.agent.events import (
+from gear_agent.agent.events import (
     AgentLoopEvent,
     ModelRequestStarted,
     SilentAgentLoopEventSink,
     ToolUseFinished,
     ToolUseStarted,
 )
-from gear_code.agent.history import FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS
-from gear_code.agent.loop import AgentLoop
-from gear_code.config import ModelConfig
-from gear_code.errors import GearError, gear_error
-from gear_code.model.client import ModelClient
-from gear_code.model.transport import HttpTransport
-from gear_code.store.memory import MemoryContextStore
-from gear_code.tools.base import Tool
+from gear_agent.agent.history import FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS
+from gear_agent.agent.loop import AgentLoop
+from gear_agent.config import ModelConfig
+from gear_agent.errors import GearError, gear_error
+from gear_agent.model.client import ModelClient
+from gear_agent.model.transport import HttpTransport
+from gear_agent.store.memory import MemoryContextStore
+from gear_agent.tools.base import Tool
 
 
 class SequencedTransport(HttpTransport):

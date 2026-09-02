@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gear_code.errors import GearError, gear_error
+from gear_agent.errors import GearError, gear_error
 
 
 def required_string(arguments: dict[str, object], key: str, tool_name: str) -> str:

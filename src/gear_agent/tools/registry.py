@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from gear_code.errors import gear_error
-from gear_code.tools.base import Tool
+from gear_agent.errors import gear_error
+from gear_agent.tools.base import Tool
 
 
 class ToolRegistry:

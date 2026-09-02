@@ -6,9 +6,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import json
 
-from gear_code.config import WebSearchConfig
-from gear_code.errors import GearError, gear_error
-from gear_code.tools.base import Tool
+from gear_agent.config import WebSearchConfig
+from gear_agent.errors import GearError, gear_error
+from gear_agent.tools.base import Tool
 
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"

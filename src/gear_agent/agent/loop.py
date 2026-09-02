@@ -3,29 +3,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from gear_code.agent.events import (
+from gear_agent.agent.events import (
     AgentLoopEventSink,
     ModelRequestStarted,
     ToolUseFinished,
     ToolUseStarted,
 )
-from gear_code.agent.history import build_model_input
-from gear_code.config import ModelConfig
-from gear_code.errors import GearError, gear_error
-from gear_code.model.client import ModelClient
-from gear_code.model.responses import (
+from gear_agent.agent.history import build_model_input
+from gear_agent.config import ModelConfig
+from gear_agent.errors import GearError, gear_error
+from gear_agent.model.client import ModelClient
+from gear_agent.model.responses import (
     extract_function_calls,
     extract_output_text,
     function_call_output_item,
 )
-from gear_code.store.base import ContextStore
-from gear_code.tools.base import Tool
-from gear_code.tools.registry import ToolRegistry
+from gear_agent.store.base import ContextStore
+from gear_agent.tools.base import Tool
+from gear_agent.tools.registry import ToolRegistry
 
 
 AGENT_INSTRUCTIONS = "\n".join(
     [
-        "You are Gear Code, a coding assistant operating inside one explicit workspace.",
+        "You are Gear Agent, a coding assistant operating inside one explicit workspace.",
         "Use workspace-relative paths for every tool argument that accepts a path.",
         "The workspace root is '.'. Use workdir='.' when running shell commands at the root.",
         "Absolute paths such as /testbed, /workspace, or host filesystem paths are invalid.",

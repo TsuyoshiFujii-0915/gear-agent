@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Mapping
 import tomllib
 
-from gear_code.errors import GearError, gear_error
+from gear_agent.errors import GearError, gear_error
 
 
 DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
@@ -156,7 +156,7 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Top-level Gear Code configuration.
+    """Top-level Gear Agent configuration.
 
     Attributes:
         model: Model endpoint configuration.
@@ -174,7 +174,7 @@ class AppConfig:
 
 
 def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
-    """Loads Gear Code configuration from TOML.
+    """Loads Gear Agent configuration from TOML.
 
     Args:
         path: Path to the TOML configuration file.
@@ -260,7 +260,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
 
 
 def discover_config_path(start_dir: Path, home_dir: Path) -> Path:
-    """Finds the effective Gear Code config file.
+    """Finds the effective Gear Agent config file.
 
     Project-scoped config files are searched first, walking from start_dir
     toward the filesystem root. User-scoped config is used only when no
@@ -289,7 +289,7 @@ def discover_config_path(start_dir: Path, home_dir: Path) -> Path:
 
     raise gear_error(
         "config_not_found",
-        "No Gear Code config found. Run 'gear init' or 'gear init --scope user'.",
+        "No Gear Agent config found. Run 'gear init' or 'gear init --scope user'.",
         "config",
         True,
         {

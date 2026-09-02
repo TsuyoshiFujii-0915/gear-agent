@@ -7,22 +7,22 @@ from uuid import uuid4
 import os
 import sys
 
-from gear_code.agent.compaction import CompactionService
-from gear_code.agent.loop import AgentLoop
-from gear_code.config import (
+from gear_agent.agent.compaction import CompactionService
+from gear_agent.agent.loop import AgentLoop
+from gear_agent.config import (
     DEFAULT_DOCKER_IMAGE,
     RuntimeConfig,
     discover_config_path,
     initialize_config,
     load_config,
 )
-from gear_code.errors import GearError
-from gear_code.model.client import ModelClient
-from gear_code.model.transport import UrllibHttpTransport
-from gear_code.store.jsonl import JsonlContextStore
-from gear_code.tools.configured import build_configured_tools
-from gear_code.tools.runtimes import DockerShellRuntime
-from gear_code.tui_app import GearApp, TextualAgentLoopEventSink
+from gear_agent.errors import GearError
+from gear_agent.model.client import ModelClient
+from gear_agent.model.transport import UrllibHttpTransport
+from gear_agent.store.jsonl import JsonlContextStore
+from gear_agent.tools.configured import build_configured_tools
+from gear_agent.tools.runtimes import DockerShellRuntime
+from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
 
 
 def main() -> None:
@@ -33,7 +33,7 @@ def main() -> None:
 
 
 def run_cli(argv: list[str], environment: Mapping[str, str]) -> int:
-    """Runs Gear Code command-line entrypoint.
+    """Runs Gear Agent command-line entrypoint.
 
     Args:
         argv: Command-line arguments without program name.
@@ -77,7 +77,7 @@ def _build_parser() -> ArgumentParser:
         help="Override runtime.model_timeout_seconds.",
     )
     subparsers = parser.add_subparsers(dest="command")
-    init_parser = subparsers.add_parser("init", help="Create a Gear Code config file.")
+    init_parser = subparsers.add_parser("init", help="Create a Gear Agent config file.")
     init_parser.add_argument(
         "--scope",
         choices=["project", "user"],

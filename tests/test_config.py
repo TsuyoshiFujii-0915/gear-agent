@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gear_code.config import discover_config_path, initialize_config, load_config
-from gear_code.errors import GearError
+from gear_agent.config import discover_config_path, initialize_config, load_config
+from gear_agent.errors import GearError
 
 
 class ConfigTests(unittest.TestCase):

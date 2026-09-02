@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from gear_code.tools.base import Tool
-from gear_code.tools.validation import (
+from gear_agent.tools.base import Tool
+from gear_agent.tools.validation import (
     is_relative_to,
     required_string,
     resolve_workspace_path,

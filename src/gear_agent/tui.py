@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from gear_code.agent.events import (
+from gear_agent.agent.events import (
     AgentLoopEvent,
     ModelRequestStarted,
     ToolUseFinished,
@@ -18,7 +18,7 @@ _MAX_PREVIEW_LINE_CHARS = 160
 
 @dataclass(frozen=True)
 class ChatLine:
-    """Visible chat line in the Gear Code TUI.
+    """Visible chat line in the Gear Agent TUI.
 
     Attributes:
         speaker: Display speaker label.

@@ -1,8 +1,8 @@
 import unittest
 from typing import Any
 
-from gear_code.tui import ChatLine, collect_chat_lines, collect_token_usage, format_progress_event
-from gear_code.agent.events import ModelRequestStarted, ToolUseFinished, ToolUseStarted
+from gear_agent.tui import ChatLine, collect_chat_lines, collect_token_usage, format_progress_event
+from gear_agent.agent.events import ModelRequestStarted, ToolUseFinished, ToolUseStarted
 
 
 class CollectTokenUsageTests(unittest.TestCase):
@@ -69,7 +69,7 @@ class CollectChatLinesTests(unittest.TestCase):
                 "payload": {
                     "call_id": "call_1",
                     "name": "file_read",
-                    "arguments": {"path": "src/gear_code/agent/loop.py"},
+                    "arguments": {"path": "src/gear_agent/agent/loop.py"},
                 },
             },
         ]
@@ -81,7 +81,7 @@ class CollectChatLinesTests(unittest.TestCase):
             [
                 ChatLine(
                     "tool",
-                    "loop ? tool file_read started\npath src/gear_code/agent/loop.py",
+                    "loop ? tool file_read started\npath src/gear_agent/agent/loop.py",
                 )
             ],
         )
@@ -288,7 +288,7 @@ class FormatProgressEventTests(unittest.TestCase):
                 iteration=1,
                 call_id="call_1",
                 name="apply_patch",
-                result={"changed_files": ["src/gear_code/tui.py", "tests/test_tui.py"]},
+                result={"changed_files": ["src/gear_agent/tui.py", "tests/test_tui.py"]},
             )
         )
 
@@ -297,7 +297,7 @@ class FormatProgressEventTests(unittest.TestCase):
             (
                 "loop 1 tool apply_patch completed\n"
                 "changed_files 2\n"
-                "  src/gear_code/tui.py\n"
+                "  src/gear_agent/tui.py\n"
                 "  tests/test_tui.py"
             ),
         )
@@ -361,8 +361,8 @@ class FormatProgressEventTests(unittest.TestCase):
                 result={
                     "pattern": "**/*.py",
                     "matches": [
-                        {"path": "src/gear_code/config.py", "type": "file"},
-                        {"path": "src/gear_code/tools", "type": "directory"},
+                        {"path": "src/gear_agent/config.py", "type": "file"},
+                        {"path": "src/gear_agent/tools", "type": "directory"},
                     ],
                     "truncated": True,
                 },
@@ -376,8 +376,8 @@ class FormatProgressEventTests(unittest.TestCase):
                 "pattern **/*.py\n"
                 "matches 2\n"
                 "truncated yes\n"
-                "  1. file src/gear_code/config.py\n"
-                "  2. directory src/gear_code/tools"
+                "  1. file src/gear_agent/config.py\n"
+                "  2. directory src/gear_agent/tools"
             ),
         )
 
@@ -393,7 +393,7 @@ class FormatProgressEventTests(unittest.TestCase):
                     "pattern": "needle",
                     "matches": [
                         {
-                            "path": "src/gear_code/example.py",
+                            "path": "src/gear_agent/example.py",
                             "line": 12,
                             "text": "return 'needle'",
                         }
@@ -411,7 +411,7 @@ class FormatProgressEventTests(unittest.TestCase):
                 "pattern needle\n"
                 "matches 1\n"
                 "truncated no\n"
-                "  1. src/gear_code/example.py:12 return 'needle'"
+                "  1. src/gear_agent/example.py:12 return 'needle'"
             ),
         )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from gear_code.store.base import ContextStore
+from gear_agent.store.base import ContextStore
 
 
 class MemoryContextStore(ContextStore):

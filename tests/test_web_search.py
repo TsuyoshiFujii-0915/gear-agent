@@ -2,9 +2,9 @@ import json
 import unittest
 from typing import Any
 
-from gear_code.config import WebSearchConfig
-from gear_code.errors import GearError, gear_error
-from gear_code.tools.web_search import TavilySearchTransport, WebSearchTool
+from gear_agent.config import WebSearchConfig
+from gear_agent.errors import GearError, gear_error
+from gear_agent.tools.web_search import TavilySearchTransport, WebSearchTool
 
 
 class FakeTavilySearchTransport(TavilySearchTransport):
