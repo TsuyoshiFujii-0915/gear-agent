@@ -20,6 +20,7 @@ from gear_agent.errors import GearError
 from gear_agent.model.client import ModelClient
 from gear_agent.model.transport import UrllibHttpTransport
 from gear_agent.store.jsonl import JsonlContextStore
+from gear_agent.store.sessions import JsonlSessionDiscovery
 from gear_agent.tools.configured import build_configured_tools
 from gear_agent.tools.runtimes import DockerShellRuntime
 from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
@@ -84,6 +85,21 @@ def _build_parser() -> ArgumentParser:
         default="project",
         help="Config scope to initialize. Defaults to project.",
     )
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="Resume a persisted session.",
+    )
+    resume_selection = resume_parser.add_mutually_exclusive_group(required=True)
+    resume_selection.add_argument(
+        "session_reference",
+        nargs="?",
+        help="Full session ID or unique session ID prefix.",
+    )
+    resume_selection.add_argument(
+        "--latest",
+        action="store_true",
+        help="Resume the most recently updated session.",
+    )
     return parser
 
 
@@ -94,7 +110,8 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
     config = load_config(config_path, environment)
     runtime = _runtime_from_args(config.runtime, args)
     workspace = runtime.workdir.resolve()
-    session_id = str(uuid4())
+    store = JsonlContextStore(runtime.session_dir)
+    session_id = _session_id_from_args(args, runtime.session_dir)
     shell_runtime = DockerShellRuntime(workspace, DEFAULT_DOCKER_IMAGE, runtime.network_enabled)
     tools = build_configured_tools(
         config.tool,
@@ -103,7 +120,6 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
         workspace,
         shell_runtime,
     )
-    store = JsonlContextStore(runtime.session_dir)
     event_sink = TextualAgentLoopEventSink()
     loop = AgentLoop(
         ModelClient(UrllibHttpTransport()),
@@ -125,6 +141,46 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
     )
     event_sink.bind(app)
     app.run()
+
+
+def _session_id_from_args(args: Namespace, session_dir: Path) -> str:
+    """Selects a fresh or persisted session ID from parsed CLI arguments.
+
+    Args:
+        args: Parsed command-line arguments.
+        session_dir: Effective session directory after runtime overrides.
+
+    Returns:
+        Session ID for the TUI run.
+
+    Raises:
+        GearError: If resume selection is missing, invalid, or cannot be resolved.
+    """
+
+    if args.command is None:
+        return str(uuid4())
+    if args.command != "resume":
+        raise GearError(
+            "session_command_invalid",
+            f"Cannot select a TUI session for command: {args.command}",
+            "cli",
+            False,
+            {"command": args.command},
+        )
+
+    discovery = JsonlSessionDiscovery(session_dir)
+    if args.latest:
+        return discovery.latest_session_id()
+    reference = args.session_reference
+    if not isinstance(reference, str) or reference == "":
+        raise GearError(
+            "session_reference_missing",
+            "A session ID or prefix is required when resuming.",
+            "cli",
+            True,
+            {},
+        )
+    return discovery.resolve_session_id(reference)
 
 
 def _run_init(args: Namespace, environment: Mapping[str, str]) -> None:
