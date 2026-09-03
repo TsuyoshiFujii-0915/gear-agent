@@ -10,7 +10,7 @@ from textual.widgets import Input, RichLog
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.events import SilentAgentLoopEventSink
 from gear_agent.agent.loop import AgentLoop
-from gear_agent.config import ModelConfig, RuntimeConfig
+from gear_agent.config import ModelConfig, ReasoningReplayMode, RuntimeConfig
 from gear_agent.model.client import ModelClient
 from gear_agent.model.transport import HttpTransport
 from gear_agent.store.jsonl import JsonlContextStore
@@ -111,6 +111,7 @@ class GearAppTests(unittest.IsolatedAsyncioTestCase):
                 url="http://localhost:1234/v1/responses",
                 model="local-model-id",
                 api_key=None,
+                reasoning_replay=ReasoningReplayMode.NONE,
             )
             transport = FinalAnswerTransport()
             client = ModelClient(transport)
@@ -180,6 +181,7 @@ class GearAppTests(unittest.IsolatedAsyncioTestCase):
                 url="http://localhost:1234/v1/responses",
                 model="local-model-id",
                 api_key=None,
+                reasoning_replay=ReasoningReplayMode.NONE,
             )
             client = ModelClient(EmptySummaryTransport())
             runtime = RuntimeConfig(

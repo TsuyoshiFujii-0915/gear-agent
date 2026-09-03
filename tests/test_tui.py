@@ -2,7 +2,13 @@ import unittest
 from typing import Any
 
 from gear_agent.tui import ChatLine, collect_chat_lines, collect_token_usage, format_progress_event
-from gear_agent.agent.events import ModelRequestStarted, ToolUseFinished, ToolUseStarted
+from gear_agent.agent.events import (
+    ModelRequestStarted,
+    ReasoningReplayEvaluated,
+    ToolUseFinished,
+    ToolUseStarted,
+)
+from gear_agent.config import ReasoningReplayMode
 
 
 class CollectTokenUsageTests(unittest.TestCase):
@@ -30,6 +36,28 @@ class CollectTokenUsageTests(unittest.TestCase):
         usage = collect_token_usage(events)
 
         self.assertIsNone(usage)
+
+    def test_reads_token_usage_from_scoped_model_response(self) -> None:
+        events: list[dict[str, Any]] = [
+            {
+                "kind": "model_response",
+                "payload": {
+                    "response": {"usage": {"total_tokens": 42}},
+                    "source": {
+                        "reasoning_replay": "encrypted",
+                        "replay_scope": {
+                            "protocol": "responses",
+                            "endpoint_identity": "sha256:ee0291cefbb5b6136483fb38ba9efe9264f9b685d5006c273e293a54b43a1883",
+                            "model": "gpt-5.5",
+                        },
+                    },
+                },
+            }
+        ]
+
+        usage = collect_token_usage(events)
+
+        self.assertEqual(usage, 42)
 
 
 class CollectChatLinesTests(unittest.TestCase):
@@ -235,6 +263,29 @@ class FormatProgressEventTests(unittest.TestCase):
         text = format_progress_event(ModelRequestStarted(session_id="session-1", iteration=2))
 
         self.assertEqual(text, "loop 2 model request")
+
+    def test_formats_reasoning_replay_diagnostic_without_opaque_content(self) -> None:
+        text = format_progress_event(
+            ReasoningReplayEvaluated(
+                session_id="session-1",
+                mode=ReasoningReplayMode.ENCRYPTED,
+                reused_encrypted_items=2,
+                dropped_disabled_items=0,
+                dropped_incompatible_scope_items=1,
+                dropped_missing_scope_items=1,
+            )
+        )
+
+        self.assertEqual(
+            text,
+            (
+                "reasoning replay encrypted\n"
+                "reused encrypted items 2\n"
+                "dropped incompatible scope 1\n"
+                "dropped missing scope 1"
+            ),
+        )
+        self.assertNotIn("encrypted_content", text)
 
     def test_formats_tool_use_finished(self) -> None:
         text = format_progress_event(

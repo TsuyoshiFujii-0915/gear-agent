@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 import json
 
 from gear_agent.errors import gear_error
 from gear_agent.model.responses import function_call_output_item
+from gear_agent.model.replay import (
+    ReasoningReplayDiagnostic,
+    ReasoningReplayPolicy,
+    empty_replay_diagnostic,
+    read_model_response_event,
+    replay_output_items,
+)
 
 
 FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS = 12000
@@ -13,39 +21,62 @@ COMPACTION_SUMMARY_PREFIX = (
 )
 
 
-def build_model_input(events: list[dict[str, Any]], current_user_text: str) -> list[object]:
+@dataclass(frozen=True)
+class ModelHistory:
+    """Model-visible input and opaque reasoning replay diagnostics.
+
+    Attributes:
+        items: Responses-compatible input items.
+        diagnostic: Counts describing opaque state reuse and removal.
+    """
+
+    items: list[object]
+    diagnostic: ReasoningReplayDiagnostic
+
+
+def build_model_input(
+    events: list[dict[str, Any]],
+    current_user_text: str,
+    replay_policy: ReasoningReplayPolicy,
+) -> ModelHistory:
     """Builds model-visible input from stored session events.
 
     Args:
         events: Stored session events ordered from oldest to newest.
         current_user_text: Current user message.
+        replay_policy: Opaque reasoning replay policy for the active model.
 
     Returns:
-        Responses API input items for the next model request.
+        Responses API input items and replay diagnostics.
 
     Raises:
         GearError: If stored model-visible history has an invalid shape.
     """
 
-    input_items = build_model_history(events)
-    input_items.append({"role": "user", "content": current_user_text})
-    return input_items
+    history = build_model_history(events, replay_policy)
+    input_items = [*history.items, {"role": "user", "content": current_user_text}]
+    return ModelHistory(items=input_items, diagnostic=history.diagnostic)
 
 
-def build_model_history(events: list[dict[str, Any]]) -> list[object]:
+def build_model_history(
+    events: list[dict[str, Any]],
+    replay_policy: ReasoningReplayPolicy,
+) -> ModelHistory:
     """Builds effective model-visible history from stored session events.
 
     Args:
         events: Stored session events ordered from oldest to newest.
+        replay_policy: Opaque reasoning replay policy for the active model.
 
     Returns:
-        Responses API input items representing the effective session context.
+        Responses API input items and replay diagnostics.
 
     Raises:
         GearError: If effective model-visible history has an invalid shape.
     """
 
     input_items: list[object] = []
+    replay_diagnostic = empty_replay_diagnostic()
     effective_events = select_effective_events(events)
     if (
         len(effective_events) > 0
@@ -99,7 +130,17 @@ def build_model_history(events: list[dict[str, Any]]) -> list[object]:
             continue
         if kind == "model_response":
             payload = _required_payload(event, kind)
-            output_items = _response_output_items(payload)
+            stored_response = read_model_response_event(payload)
+            output_items = _response_output_items(stored_response.response)
+            replayed_output = replay_output_items(
+                output_items,
+                stored_response.source_scope,
+                replay_policy,
+            )
+            output_items = replayed_output.items
+            replay_diagnostic = replay_diagnostic.combine(
+                replayed_output.diagnostic
+            )
             preceding_response_assistant_text = _assistant_output_text(output_items)
             for item in output_items:
                 item_type = _required_string(item, "type", "model_response.output")
@@ -129,7 +170,7 @@ def build_model_history(events: list[dict[str, Any]]) -> list[object]:
                 raise _shape_error("tool_result.result must be an object.", "tool_result")
             input_items.append(_history_function_call_output_item(call_id, result))
 
-    return input_items
+    return ModelHistory(items=input_items, diagnostic=replay_diagnostic)
 
 
 def select_effective_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

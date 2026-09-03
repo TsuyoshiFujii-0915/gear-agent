@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from gear_agent.config import ModelConfig
+from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.model.transport import HttpTransport
 
 
@@ -43,6 +43,8 @@ class ModelClient:
             "instructions": instructions,
             "stream": False,
         }
+        if config.reasoning_replay is ReasoningReplayMode.ENCRYPTED:
+            payload["include"] = ["reasoning.encrypted_content"]
         if len(tools) > 0:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

@@ -4,13 +4,14 @@ from typing import Any
 from gear_agent.agent.events import (
     AgentLoopEvent,
     ModelRequestStarted,
+    ReasoningReplayEvaluated,
     SilentAgentLoopEventSink,
     ToolUseFinished,
     ToolUseStarted,
 )
 from gear_agent.agent.history import FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS
 from gear_agent.agent.loop import AgentLoop
-from gear_agent.config import ModelConfig
+from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
 from gear_agent.model.client import ModelClient
 from gear_agent.model.transport import HttpTransport
@@ -169,6 +170,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
@@ -183,6 +185,14 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(
             event_sink.events,
             [
+                ReasoningReplayEvaluated(
+                    session_id="session-1",
+                    mode=ReasoningReplayMode.NONE,
+                    reused_encrypted_items=0,
+                    dropped_disabled_items=0,
+                    dropped_incompatible_scope_items=0,
+                    dropped_missing_scope_items=0,
+                ),
                 ModelRequestStarted(session_id="session-1", iteration=1),
                 ToolUseStarted(
                     session_id="session-1",
@@ -238,6 +248,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
@@ -291,6 +302,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         store.append("session-1", "user_input", {"text": "old request"})
@@ -342,6 +354,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         store.append("session-1", "user_input", {"text": "old request"})
@@ -387,6 +400,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         store.append("session-1", "compaction_summary", {"text": "saved summary"})
@@ -439,6 +453,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         store.append(
@@ -480,6 +495,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         store.append("session-1", "user_input", {"text": "preserved request"})
@@ -534,6 +550,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
@@ -577,6 +594,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
@@ -590,9 +608,9 @@ class AgentLoopTests(unittest.TestCase):
         self.assertIn("function_call_output", str(second_input))
         self.assertIn("path_outside_workspace", str(second_input))
         self.assertIn("/testbed", str(second_input))
-        self.assertEqual(len(event_sink.events), 4)
+        self.assertEqual(len(event_sink.events), 5)
         self.assertEqual(
-            event_sink.events[1],
+            event_sink.events[2],
             ToolUseStarted(
                 session_id="session-1",
                 iteration=1,
@@ -602,7 +620,7 @@ class AgentLoopTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            event_sink.events[2],
+            event_sink.events[3],
             ToolUseFinished(
                 session_id="session-1",
                 iteration=1,
@@ -619,9 +637,215 @@ class AgentLoopTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            event_sink.events[3],
+            event_sink.events[4],
             ModelRequestStarted(session_id="session-1", iteration=2),
         )
+
+    def test_persists_and_resumes_compatible_encrypted_reasoning(self) -> None:
+        transport = SequencedTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "id": "reasoning_1",
+                            "summary": [],
+                            "encrypted_content": "opaque-state",
+                        },
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "first"}],
+                        },
+                    ]
+                },
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "resumed"}],
+                        }
+                    ]
+                },
+            ]
+        )
+        config = ModelConfig(
+            url="https://api.openai.com/v1/responses",
+            model="gpt-5.5",
+            api_key="api-secret",
+            reasoning_replay=ReasoningReplayMode.ENCRYPTED,
+        )
+        store = MemoryContextStore()
+        AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            SilentAgentLoopEventSink(),
+        ).run_turn("session-1", "start", 4, 30)
+        resumed_events = RecordingEventSink()
+        result = AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            resumed_events,
+        ).run_turn("session-1", "continue", 4, 30)
+
+        self.assertEqual(result.final_text, "resumed")
+        self.assertIn("opaque-state", str(transport.payloads[1]["input"]))
+        stored_response = store.events[1]["payload"]
+        self.assertEqual(
+            stored_response["source"],
+            {
+                "reasoning_replay": "encrypted",
+                "replay_scope": {
+                    "protocol": "responses",
+                    "endpoint_identity": "sha256:ee0291cefbb5b6136483fb38ba9efe9264f9b685d5006c273e293a54b43a1883",
+                    "model": "gpt-5.5",
+                },
+            },
+        )
+        self.assertNotIn("api-secret", str(stored_response["source"]))
+        self.assertEqual(
+            resumed_events.events[0],
+            ReasoningReplayEvaluated(
+                session_id="session-1",
+                mode=ReasoningReplayMode.ENCRYPTED,
+                reused_encrypted_items=1,
+                dropped_disabled_items=0,
+                dropped_incompatible_scope_items=0,
+                dropped_missing_scope_items=0,
+            ),
+        )
+
+    def test_resume_drops_incompatible_encrypted_reasoning_without_mutating_store(
+        self,
+    ) -> None:
+        stored_response = {
+            "response": {
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "portable summary"}
+                        ],
+                        "encrypted_content": "old-opaque-state",
+                    },
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "old answer"}],
+                    },
+                ]
+            },
+            "source": {
+                "reasoning_replay": "encrypted",
+                "replay_scope": {
+                    "protocol": "responses",
+                    "endpoint_identity": "sha256:ee0291cefbb5b6136483fb38ba9efe9264f9b685d5006c273e293a54b43a1883",
+                    "model": "gpt-5.4",
+                },
+            },
+        }
+        store = MemoryContextStore()
+        store.append("session-1", "user_input", {"text": "old request"})
+        store.append("session-1", "model_response", stored_response)
+        store.append("session-1", "assistant_message", {"text": "old answer"})
+        transport = SequencedTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "new answer"}],
+                        }
+                    ]
+                }
+            ]
+        )
+        current_config = ModelConfig(
+            url="https://api.openai.com/v1/responses",
+            model="gpt-5.5",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.ENCRYPTED,
+        )
+        event_sink = RecordingEventSink()
+
+        AgentLoop(
+            ModelClient(transport),
+            current_config,
+            [],
+            store,
+            event_sink,
+        ).run_turn("session-1", "continue", 4, 30)
+
+        request_input = transport.payloads[0]["input"]
+        self.assertNotIn("old-opaque-state", str(request_input))
+        self.assertIn("portable summary", str(request_input))
+        self.assertEqual(
+            event_sink.events[0],
+            ReasoningReplayEvaluated(
+                session_id="session-1",
+                mode=ReasoningReplayMode.ENCRYPTED,
+                reused_encrypted_items=0,
+                dropped_disabled_items=0,
+                dropped_incompatible_scope_items=1,
+                dropped_missing_scope_items=0,
+            ),
+        )
+        self.assertEqual(
+            store.events[1]["payload"]["response"]["output"][0][
+                "encrypted_content"
+            ],
+            "old-opaque-state",
+        )
+
+    def test_disabled_replay_sanitizes_unexpected_opaque_state_within_turn(
+        self,
+    ) -> None:
+        transport = SequencedTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "summary": [],
+                            "encrypted_content": "unexpected-opaque-state",
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "echo",
+                            "arguments": '{"text": "ok"}',
+                        },
+                    ]
+                },
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "done"}],
+                        }
+                    ]
+                },
+            ]
+        )
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
+        )
+
+        AgentLoop(
+            ModelClient(transport),
+            config,
+            [EchoTool()],
+            MemoryContextStore(),
+            SilentAgentLoopEventSink(),
+        ).run_turn("session-1", "hello", 4, 30)
+
+        self.assertNotIn("unexpected-opaque-state", str(transport.payloads[1]["input"]))
+        self.assertIn("function_call", str(transport.payloads[1]["input"]))
 
     def test_unrecoverable_tool_error_is_not_returned_to_model(self) -> None:
         transport = SequencedTransport(
@@ -643,6 +867,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
@@ -686,6 +911,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
@@ -736,6 +962,7 @@ class AgentLoopTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()

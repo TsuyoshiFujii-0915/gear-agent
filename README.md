@@ -60,6 +60,7 @@ LM Studio など、API キーなしのローカル互換エンドポイントを
 url = "http://localhost:1234/v1/responses"
 model = "local-model-id"
 api_key_env = ""
+reasoning_replay = "none"
 
 [tool]
 shell_tool = true
@@ -103,6 +104,7 @@ OpenAI の Responses API を使う例です。`model` は利用可能なモデ�
 url = "https://api.openai.com/v1/responses"
 model = "gpt-5.5"
 api_key_env = "OPENAI_API_KEY"
+reasoning_replay = "encrypted"
 
 [tool]
 shell_tool = true
@@ -141,6 +143,21 @@ model_timeout_seconds = 120
 
 `api_key_env` が空文字の場合、認証ヘッダーは送信しません。
 環境変数名が指定されているのに値が存在しない場合は、設定エラーとして起動時に失敗します。
+
+`reasoning_replay` は必須で、`none` または `encrypted` を指定します。
+`none` は opaque な reasoning state を要求・再送しません。`encrypted` は Responses リクエストへ
+`include = ["reasoning.encrypted_content"]` 相当の指定を加え、暗号化された reasoning item を
+手動履歴で再送します。未対応値や設定欠落は設定ロード時に失敗します。
+
+暗号化された state は、protocol、設定 endpoint URL の SHA-256 identity、model ID が保存時と
+現在で完全一致する場合にだけ再利用されます。endpoint または model を変更した場合や、scope
+metadata を持たない旧JSONLセッションでは `encrypted_content` のみをモデル入力から除去し、
+reasoning summary、メッセージ、ツール履歴は維持します。保存済みJSONL自体は変更しません。
+`encrypted` の場合、credential の派生値をscope metadataへ保存しないため、userinfo、query、
+fragment を含むendpoint URLは設定エラーとして拒否します。
+この設定は OpenAI Responses API の
+[`reasoning.encrypted_content`](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+に対応しています。
 
 `[tool]` はモデルへ公開するツールを明示的に制御します。すべてのキーは必須の真偽値です。
 未定義のキー、欠けているキー、真偽値以外の値は設定エラーとして起動時に失敗します。

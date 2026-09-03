@@ -3,11 +3,77 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gear_agent.config import discover_config_path, initialize_config, load_config
+from gear_agent.config import (
+    DEFAULT_CONFIG_TEXT,
+    ReasoningReplayMode,
+    discover_config_path,
+    initialize_config,
+    load_config,
+)
 from gear_agent.errors import GearError
 
 
 class ConfigTests(unittest.TestCase):
+    def test_loads_explicit_reasoning_replay_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(DEFAULT_CONFIG_TEXT, encoding="utf-8")
+
+            disabled_config = load_config(config_path, {})
+
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace(
+                    'reasoning_replay = "none"',
+                    'reasoning_replay = "encrypted"',
+                ),
+                encoding="utf-8",
+            )
+            encrypted_config = load_config(config_path, {})
+
+            self.assertEqual(
+                disabled_config.model.reasoning_replay,
+                ReasoningReplayMode.NONE,
+            )
+            self.assertEqual(
+                encrypted_config.model.reasoning_replay,
+                ReasoningReplayMode.ENCRYPTED,
+            )
+
+    def test_rejects_invalid_reasoning_replay_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace(
+                    'reasoning_replay = "none"',
+                    'reasoning_replay = "automatic"',
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(GearError) as raised:
+                load_config(config_path, {})
+
+            self.assertEqual(raised.exception.error_type, "config_value_invalid")
+            self.assertEqual(raised.exception.origin, "config")
+            self.assertEqual(raised.exception.details["table"], "model")
+            self.assertEqual(raised.exception.details["key"], "reasoning_replay")
+            self.assertEqual(raised.exception.details["value"], "automatic")
+
+    def test_rejects_missing_reasoning_replay_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace('reasoning_replay = "none"\n', ""),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(GearError) as raised:
+                load_config(config_path, {})
+
+            self.assertEqual(raised.exception.error_type, "config_value_invalid")
+            self.assertEqual(raised.exception.origin, "config")
+            self.assertIn("model.reasoning_replay", raised.exception.message)
+
     def test_loads_openai_api_key_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "gear.toml"
@@ -18,6 +84,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "https://api.openai.com/v1/responses"',
                         'model = "gpt-5.5"',
                         'api_key_env = "OPENAI_API_KEY"',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -73,6 +140,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -120,6 +188,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -160,6 +229,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -215,6 +285,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -273,6 +344,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -312,6 +384,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -359,6 +432,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -406,6 +480,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -445,6 +520,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -493,6 +569,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -541,6 +618,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "https://api.openai.com/v1/responses"',
                         'model = "gpt-5.5"',
                         'api_key_env = "OPENAI_API_KEY"',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -580,6 +658,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -619,6 +698,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -648,6 +728,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -687,6 +768,7 @@ class ConfigTests(unittest.TestCase):
                         'url = "http://localhost:1234/v1/responses"',
                         'model = "local-model-id"',
                         'api_key_env = ""',
+                        'reasoning_replay = "none"',
                         "",
                         "[runtime]",
                         'workdir = "."',
@@ -764,6 +846,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(path, root / ".gear" / "config.toml")
             config_text = path.read_text(encoding="utf-8")
             self.assertIn("[model]", config_text)
+            self.assertIn('reasoning_replay = "none"', config_text)
             self.assertIn("[tool]", config_text)
             self.assertIn("[web_search]", config_text)
             self.assertIn("[web_fetch]", config_text)

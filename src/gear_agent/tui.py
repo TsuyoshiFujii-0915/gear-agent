@@ -7,9 +7,11 @@ from typing import Any, Callable
 from gear_agent.agent.events import (
     AgentLoopEvent,
     ModelRequestStarted,
+    ReasoningReplayEvaluated,
     ToolUseFinished,
     ToolUseStarted,
 )
+from gear_agent.model.replay import MODEL_RESPONSE_ENVELOPE_SCHEMA
 
 
 _MAX_PREVIEW_LINES = 6
@@ -97,9 +99,12 @@ def collect_token_usage(events: list[dict[str, Any]]) -> int | None:
         if event.get("kind") != "model_response":
             continue
         payload = event.get("payload")
-        if not isinstance(payload, dict) or "usage" not in payload:
+        if not isinstance(payload, dict):
             continue
-        usage = payload["usage"]
+        response = _model_response_payload(payload)
+        if "usage" not in response:
+            continue
+        usage = response["usage"]
         if usage is None:
             continue
         if not isinstance(usage, dict):
@@ -183,6 +188,8 @@ def format_progress_event(event: AgentLoopEvent) -> str:
     try:
         if isinstance(event, ModelRequestStarted):
             return _format_model_request_started(event)
+        if isinstance(event, ReasoningReplayEvaluated):
+            return _format_reasoning_replay_evaluated(event)
         if isinstance(event, ToolUseStarted):
             return _format_tool_use_started(event)
         if isinstance(event, ToolUseFinished):
@@ -251,6 +258,38 @@ def _format_tool_use_finished(event: ToolUseFinished) -> str:
 
 def _format_model_request_started(event: ModelRequestStarted) -> str:
     return f"loop {event.iteration} model request"
+
+
+def _format_reasoning_replay_evaluated(
+    event: ReasoningReplayEvaluated,
+) -> str:
+    lines = [f"reasoning replay {event.mode.value}"]
+    if event.reused_encrypted_items > 0:
+        lines.append(f"reused encrypted items {event.reused_encrypted_items}")
+    if event.dropped_disabled_items > 0:
+        lines.append(f"dropped disabled {event.dropped_disabled_items}")
+    if event.dropped_incompatible_scope_items > 0:
+        lines.append(
+            f"dropped incompatible scope {event.dropped_incompatible_scope_items}"
+        )
+    if event.dropped_missing_scope_items > 0:
+        lines.append(f"dropped missing scope {event.dropped_missing_scope_items}")
+    return "\n".join(lines)
+
+
+def _model_response_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    is_envelope = payload.get("schema") == MODEL_RESPONSE_ENVELOPE_SCHEMA or (
+        "output" not in payload and ("response" in payload or "source" in payload)
+    )
+    if not is_envelope:
+        return payload
+    response = payload.get("response")
+    source = payload.get("source")
+    if not isinstance(response, dict):
+        raise ValueError("model_response response must be an object.")
+    if not isinstance(source, dict):
+        raise ValueError("model_response source must be an object.")
+    return response
 
 
 def _format_tool_started(iteration: str, tool_name: str, arguments: dict[str, object]) -> str:

@@ -1,7 +1,7 @@
 import unittest
 from typing import Any
 
-from gear_agent.config import ModelConfig
+from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.model.client import ModelClient
 from gear_agent.model.transport import HttpTransport
 
@@ -30,6 +30,7 @@ class ModelClientTests(unittest.TestCase):
             url="https://api.openai.com/v1/responses",
             model="gpt-5.5",
             api_key="secret-key",
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         client.create_response(config, "hello", [], "Follow the instructions.", 30)
@@ -41,7 +42,25 @@ class ModelClientTests(unittest.TestCase):
         self.assertEqual(payload["input"], "hello")
         self.assertEqual(payload["instructions"], "Follow the instructions.")
         self.assertIs(payload["stream"], False)
+        self.assertNotIn("include", payload)
+        self.assertNotIn("previous_response_id", payload)
         self.assertEqual(timeout_seconds, 30)
+
+    def test_requests_encrypted_reasoning_content_when_enabled(self) -> None:
+        transport = RecordingTransport({"output": []})
+        client = ModelClient(transport)
+        config = ModelConfig(
+            url="https://api.openai.com/v1/responses",
+            model="gpt-5.5",
+            api_key="secret-key",
+            reasoning_replay=ReasoningReplayMode.ENCRYPTED,
+        )
+
+        client.create_response(config, "hello", [], "Follow the instructions.", 30)
+
+        _, _, payload, _ = transport.calls[0]
+        self.assertEqual(payload["include"], ["reasoning.encrypted_content"])
+        self.assertNotIn("previous_response_id", payload)
 
     def test_omits_authorization_header_without_api_key(self) -> None:
         transport = RecordingTransport({"output": []})
@@ -50,6 +69,7 @@ class ModelClientTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         client.create_response(config, "hello", [], "Follow the instructions.", 30)

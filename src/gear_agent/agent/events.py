@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias
 
+from gear_agent.config import ReasoningReplayMode
+
 
 @dataclass(frozen=True)
 class ModelRequestStarted:
@@ -15,6 +17,27 @@ class ModelRequestStarted:
 
     session_id: str
     iteration: int
+
+
+@dataclass(frozen=True)
+class ReasoningReplayEvaluated:
+    """Structured diagnostic for active opaque reasoning history.
+
+    Attributes:
+        session_id: Session identifier.
+        mode: Active encrypted reasoning replay mode.
+        reused_encrypted_items: Compatible opaque items retained.
+        dropped_disabled_items: Opaque items removed because replay is disabled.
+        dropped_incompatible_scope_items: Opaque items removed on scope mismatch.
+        dropped_missing_scope_items: Opaque items removed because metadata is absent.
+    """
+
+    session_id: str
+    mode: ReasoningReplayMode
+    reused_encrypted_items: int
+    dropped_disabled_items: int
+    dropped_incompatible_scope_items: int
+    dropped_missing_scope_items: int
 
 
 @dataclass(frozen=True)
@@ -55,7 +78,12 @@ class ToolUseFinished:
     result: dict[str, object]
 
 
-AgentLoopEvent: TypeAlias = ModelRequestStarted | ToolUseStarted | ToolUseFinished
+AgentLoopEvent: TypeAlias = (
+    ModelRequestStarted
+    | ReasoningReplayEvaluated
+    | ToolUseStarted
+    | ToolUseFinished
+)
 
 
 class AgentLoopEventSink(Protocol):
