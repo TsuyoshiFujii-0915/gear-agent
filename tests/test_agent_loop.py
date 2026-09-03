@@ -264,7 +264,10 @@ class AgentLoopTests(unittest.TestCase):
                     "call_id": "call_1",
                     "output": '{"text": "ok"}',
                 },
-                {"role": "assistant", "content": "done"},
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "done"}],
+                },
                 {"role": "user", "content": "continue"},
             ],
         )
