@@ -197,12 +197,27 @@ max_content_chars = 20000
 uv run gear
 ```
 
+保存済みセッションを完全なセッション ID または一意な短縮 prefix で再開できます。
+TUI に表示される先頭 8 文字も、一意であれば利用できます。
+
+```bash
+uv run gear resume 12345678
+uv run gear resume 12345678-1234-5678-1234-567812345678
+```
+
+有効な `session_dir` で最後に更新されたセッションを再開する場合は、次を使います。
+
+```bash
+uv run gear resume --latest
+```
+
 設定ファイルや実行時設定は CLI オプションで一時的に上書きできます。
 
 ```bash
 uv run gear --config custom.toml
 uv run gear --workdir ../target-project --network enabled
 uv run gear --max-iterations 4 --model-timeout-seconds 30
+uv run gear --session-dir ../sessions resume --latest
 ```
 
 Shell tool の Docker image はコード側で `python:3.11-slim` に固定しています。

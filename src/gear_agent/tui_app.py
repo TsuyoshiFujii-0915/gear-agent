@@ -210,6 +210,7 @@ class GearApp(App[None]):
         self._store = store
         self._runtime = runtime
         self._model_config = model_config
+        self._initial_events = store.load(session_id)
         self._token_usage: int | None = None
 
     def compose(self) -> ComposeResult:
@@ -223,9 +224,9 @@ class GearApp(App[None]):
 
     def on_mount(self) -> None:
         self.console.push_theme(_MARKDOWN_THEME)
-        events = self._store.load(self._session_id)
-        self._token_usage = collect_token_usage(events)
-        self._render_history(collect_chat_lines(events))
+        self._token_usage = collect_token_usage(self._initial_events)
+        self.query_one("#header", Static).update(self._build_header())
+        self._render_history(collect_chat_lines(self._initial_events))
         self.query_one(Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
