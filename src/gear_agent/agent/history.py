@@ -8,6 +8,9 @@ from gear_agent.model.responses import function_call_output_item
 
 
 FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS = 12000
+COMPACTION_SUMMARY_PREFIX = (
+    "Earlier session context (compressed continuation, not a new user request):"
+)
 
 
 def build_model_input(events: list[dict[str, Any]], current_user_text: str) -> list[object]:
@@ -24,9 +27,44 @@ def build_model_input(events: list[dict[str, Any]], current_user_text: str) -> l
         GearError: If stored model-visible history has an invalid shape.
     """
 
+    input_items = build_model_history(events)
+    input_items.append({"role": "user", "content": current_user_text})
+    return input_items
+
+
+def build_model_history(events: list[dict[str, Any]]) -> list[object]:
+    """Builds effective model-visible history from stored session events.
+
+    Args:
+        events: Stored session events ordered from oldest to newest.
+
+    Returns:
+        Responses API input items representing the effective session context.
+
+    Raises:
+        GearError: If effective model-visible history has an invalid shape.
+    """
+
     input_items: list[object] = []
+    effective_events = select_effective_events(events)
+    if (
+        len(effective_events) > 0
+        and _required_event_kind(effective_events[0]) == "compaction_summary"
+    ):
+        payload = _required_payload(effective_events[0], "compaction_summary")
+        summary = _required_string(payload, "text", "compaction_summary")
+        input_items.append(
+            {
+                "role": "user",
+                "content": f"{COMPACTION_SUMMARY_PREFIX}\n\n{summary}",
+            }
+        )
+        replay_events = effective_events[1:]
+    else:
+        replay_events = effective_events
+
     seen_call_ids: set[str] = set()
-    for event in events:
+    for event in replay_events:
         kind = _required_event_kind(event)
         if kind == "user_input":
             payload = _required_payload(event, kind)
@@ -69,8 +107,46 @@ def build_model_input(events: list[dict[str, Any]], current_user_text: str) -> l
                 raise _shape_error("tool_result.result must be an object.", "tool_result")
             input_items.append(_history_function_call_output_item(call_id, result))
 
-    input_items.append({"role": "user", "content": current_user_text})
     return input_items
+
+
+def select_effective_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Selects the latest compaction checkpoint and all subsequent events.
+
+    Args:
+        events: Stored session events ordered from oldest to newest.
+
+    Returns:
+        A new list containing the effective session event slice.
+
+    Raises:
+        GearError: If the checkpoint or later events have an invalid shape.
+    """
+
+    checkpoint = _latest_compaction_checkpoint(events)
+    if checkpoint is None:
+        return list(events)
+    checkpoint_index, _ = checkpoint
+    return events[checkpoint_index:]
+
+
+def _latest_compaction_checkpoint(
+    events: list[dict[str, Any]],
+) -> tuple[int, str] | None:
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        kind = _required_event_kind(event)
+        if kind != "compaction_summary":
+            continue
+        payload = _required_payload(event, kind)
+        summary = _required_string(payload, "text", kind)
+        if summary.strip() == "":
+            raise _shape_error(
+                "compaction_summary.text must not be empty.",
+                "compaction_summary",
+            )
+        return index, summary
+    return None
 
 
 def _function_call_items(response: dict[str, Any]) -> list[dict[str, object]]:

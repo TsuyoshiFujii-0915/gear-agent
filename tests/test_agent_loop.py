@@ -269,6 +269,232 @@ class AgentLoopTests(unittest.TestCase):
             ],
         )
 
+    def test_compaction_summary_replaces_earlier_history_in_next_model_request(
+        self,
+    ) -> None:
+        transport = SequencedTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "continued"}],
+                        }
+                    ]
+                }
+            ]
+        )
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+        )
+        store = MemoryContextStore()
+        store.append("session-1", "user_input", {"text": "old request"})
+        store.append("session-1", "assistant_message", {"text": "old response"})
+        store.append("session-1", "compaction_summary", {"text": "saved summary"})
+        store.append("session-1", "user_input", {"text": "work after summary"})
+        store.append("session-1", "assistant_message", {"text": "post-summary answer"})
+        loop = AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            SilentAgentLoopEventSink(),
+        )
+
+        result = loop.run_turn("session-1", "continue", 4, 30)
+
+        self.assertEqual(result.final_text, "continued")
+        self.assertEqual(
+            transport.payloads[0]["input"],
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Earlier session context (compressed continuation, not a new user "
+                        "request):\n\nsaved summary"
+                    ),
+                },
+                {"role": "user", "content": "work after summary"},
+                {"role": "assistant", "content": "post-summary answer"},
+                {"role": "user", "content": "continue"},
+            ],
+        )
+
+    def test_compaction_followed_immediately_by_new_user_turn(self) -> None:
+        transport = SequencedTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "continued"}],
+                        }
+                    ]
+                }
+            ]
+        )
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+        )
+        store = MemoryContextStore()
+        store.append("session-1", "user_input", {"text": "old request"})
+        store.append("session-1", "compaction_summary", {"text": "saved summary"})
+        loop = AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            SilentAgentLoopEventSink(),
+        )
+
+        loop.run_turn("session-1", "new request", 4, 30)
+
+        self.assertEqual(
+            transport.payloads[0]["input"],
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Earlier session context (compressed continuation, not a new user "
+                        "request):\n\nsaved summary"
+                    ),
+                },
+                {"role": "user", "content": "new request"},
+            ],
+        )
+
+    def test_replays_and_truncates_tool_history_after_compaction(self) -> None:
+        transport = SequencedTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "continued"}],
+                        }
+                    ]
+                }
+            ]
+        )
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+        )
+        store = MemoryContextStore()
+        store.append("session-1", "compaction_summary", {"text": "saved summary"})
+        store.append(
+            "session-1",
+            "model_response",
+            {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_after_summary",
+                        "name": "large_output",
+                        "arguments": "{}",
+                    }
+                ]
+            },
+        )
+        store.append(
+            "session-1",
+            "tool_result",
+            {
+                "call_id": "call_after_summary",
+                "iteration": 1,
+                "name": "large_output",
+                "result": {"text": "x" * (FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS + 20)},
+            },
+        )
+        loop = AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            SilentAgentLoopEventSink(),
+        )
+
+        loop.run_turn("session-1", "continue", 4, 30)
+
+        request_input = transport.payloads[0]["input"]
+        self.assertEqual(request_input[1]["call_id"], "call_after_summary")
+        self.assertEqual(request_input[2]["call_id"], "call_after_summary")
+        self.assertIn('"truncated": true', request_input[2]["output"])
+        self.assertNotIn(
+            "x" * (FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS + 20),
+            request_input[2]["output"],
+        )
+
+    def test_rejects_orphan_tool_result_after_compaction(self) -> None:
+        transport = SequencedTransport([])
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+        )
+        store = MemoryContextStore()
+        store.append(
+            "session-1",
+            "model_response",
+            {"output": "malformed but before checkpoint"},
+        )
+        store.append("session-1", "compaction_summary", {"text": "saved summary"})
+        store.append(
+            "session-1",
+            "tool_result",
+            {
+                "call_id": "orphan_call",
+                "iteration": 1,
+                "name": "echo",
+                "result": {"text": "orphan"},
+            },
+        )
+        loop = AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            SilentAgentLoopEventSink(),
+        )
+
+        with self.assertRaises(GearError) as raised:
+            loop.run_turn("session-1", "continue", 4, 30)
+
+        self.assertIn(
+            "Stored tool_result has no preceding function_call",
+            str(raised.exception),
+        )
+        self.assertEqual(transport.payloads, [])
+
+    def test_rejects_stored_empty_compaction_checkpoint(self) -> None:
+        transport = SequencedTransport([])
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+        )
+        store = MemoryContextStore()
+        store.append("session-1", "user_input", {"text": "preserved request"})
+        store.append("session-1", "compaction_summary", {"text": "   "})
+        loop = AgentLoop(
+            ModelClient(transport),
+            config,
+            [],
+            store,
+            SilentAgentLoopEventSink(),
+        )
+
+        with self.assertRaises(GearError) as raised:
+            loop.run_turn("session-1", "continue", 4, 30)
+
+        self.assertIn("compaction_summary.text must not be empty", str(raised.exception))
+        self.assertEqual(transport.payloads, [])
+
     def test_truncates_stored_function_call_output_only_on_later_turns(self) -> None:
         transport = SequencedTransport(
             [

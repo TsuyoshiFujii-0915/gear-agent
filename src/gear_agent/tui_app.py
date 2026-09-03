@@ -260,12 +260,16 @@ class GearApp(App[None]):
 
     @work(thread=True)
     def _do_compact(self) -> None:
-        self._compaction.compact(
-            self._session_id,
-            self._store,
-            self._model_config,
-            self._runtime.model_timeout_seconds,
-        )
+        try:
+            self._compaction.compact(
+                self._session_id,
+                self._store,
+                self._model_config,
+                self._runtime.model_timeout_seconds,
+            )
+        except Exception as exc:
+            self._store.append(self._session_id, "turn_error", {"text": str(exc)})
+            self.call_from_thread(self._write_error, str(exc))
         self._finish_work()
 
     def _finish_work(self) -> None:
