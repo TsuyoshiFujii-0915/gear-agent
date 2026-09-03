@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import json
 
-from gear_code.errors import gear_error
+from gear_agent.errors import gear_error
 
 
 class HttpTransport(ABC):

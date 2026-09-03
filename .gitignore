@@ -30,7 +30,7 @@ htmlcov/
 .pyre/
 .ruff_cache/
 
-# Gear Code configurations
+# Gear Agent configurations
 .gear/
 
 # Environment and local secret files

@@ -1,9 +1,9 @@
 import unittest
 from typing import Any
 
-from gear_code.config import ModelConfig
-from gear_code.model.client import ModelClient
-from gear_code.model.transport import HttpTransport
+from gear_agent.config import ModelConfig
+from gear_agent.model.client import ModelClient
+from gear_agent.model.transport import HttpTransport
 
 
 class RecordingTransport(HttpTransport):

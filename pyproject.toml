@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gear-code"
+name = "gear-agent"
 version = "0.1.0"
 description = "A minimal educational coding agent using Responses API-compatible endpoints."
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ dev = [
 ]
 
 [project.scripts]
-gear = "gear_code.cli:main"
+gear = "gear_agent.cli:main"
 
 [tool.uv]
 package = true

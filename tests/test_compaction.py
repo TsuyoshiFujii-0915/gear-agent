@@ -1,12 +1,12 @@
 import unittest
 from typing import Any
 
-from gear_code.agent.compaction import CompactionService
-from gear_code.config import ModelConfig
-from gear_code.errors import GearError
-from gear_code.model.client import ModelClient
-from gear_code.model.transport import HttpTransport
-from gear_code.store.memory import MemoryContextStore
+from gear_agent.agent.compaction import CompactionService
+from gear_agent.config import ModelConfig
+from gear_agent.errors import GearError
+from gear_agent.model.client import ModelClient
+from gear_agent.model.transport import HttpTransport
+from gear_agent.store.memory import MemoryContextStore
 
 
 class CompactionTransport(HttpTransport):

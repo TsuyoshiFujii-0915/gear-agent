@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gear_code.tools.base import Tool
-from gear_code.tools.runtimes import ShellRuntime
-from gear_code.tools.validation import (
+from gear_agent.tools.base import Tool
+from gear_agent.tools.runtimes import ShellRuntime
+from gear_agent.tools.validation import (
     required_int,
     required_string,
     resolve_workspace_path,

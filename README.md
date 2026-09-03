@@ -1,6 +1,6 @@
-# Gear Code
+# Gear Agent
 
-Gear Code は、Responses API 互換エンドポイントを使う最小構成の学習用コーディングエージェントです。
+Gear Agent は、Responses API 互換エンドポイントを使う最小構成の学習用コーディングエージェントです。
 Codex の中核動作を理解しやすい Python コードとして表現することを目的にしています。
 
 現在の実装は、対話型 TUI、モデル呼び出し、ツール実行、JSONL 形式のセッション保存、明示的な履歴コンパクションを備えています。
@@ -243,7 +243,7 @@ Shell tool の Docker image はコード側で `python:3.11-slim` に固定し�
 |   |-- PLAN.md
 |   `-- decisions/
 |-- src/
-|   `-- gear_code/
+|   `-- gear_agent/
 |       |-- __init__.py
 |       |-- agent/
 |       |   |-- compaction.py

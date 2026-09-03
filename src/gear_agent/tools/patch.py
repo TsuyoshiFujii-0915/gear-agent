@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
-from gear_code.tools.base import Tool
-from gear_code.tools.validation import required_string, tool_error
+from gear_agent.tools.base import Tool
+from gear_agent.tools.validation import required_string, tool_error
 
 
 class ApplyPatchTool(Tool):

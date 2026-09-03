@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gear_code.config import ToolConfig, WebFetchConfig, WebSearchConfig
-from gear_code.errors import gear_error
-from gear_code.tools.base import Tool
-from gear_code.tools.filesystem import FileReadTool, FileWriteTool
-from gear_code.tools.filesystem_search import GlobTool, GrepTool
-from gear_code.tools.patch import ApplyPatchTool
-from gear_code.tools.runtimes import ShellRuntime
-from gear_code.tools.shell import ShellTool
-from gear_code.tools.web_fetch import UrllibTavilyFetchTransport, WebFetchTool
-from gear_code.tools.web_search import UrllibTavilySearchTransport, WebSearchTool
+from gear_agent.config import ToolConfig, WebFetchConfig, WebSearchConfig
+from gear_agent.errors import gear_error
+from gear_agent.tools.base import Tool
+from gear_agent.tools.filesystem import FileReadTool, FileWriteTool
+from gear_agent.tools.filesystem_search import GlobTool, GrepTool
+from gear_agent.tools.patch import ApplyPatchTool
+from gear_agent.tools.runtimes import ShellRuntime
+from gear_agent.tools.shell import ShellTool
+from gear_agent.tools.web_fetch import UrllibTavilyFetchTransport, WebFetchTool
+from gear_agent.tools.web_search import UrllibTavilySearchTransport, WebSearchTool
 
 
 def build_configured_tools(

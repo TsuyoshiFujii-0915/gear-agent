@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 import json
 
-from gear_code.errors import gear_error
+from gear_agent.errors import gear_error
 
 
 @dataclass(frozen=True)

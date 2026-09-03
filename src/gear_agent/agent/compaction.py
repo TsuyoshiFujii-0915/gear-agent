@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 import json
 
-from gear_code.config import ModelConfig
-from gear_code.model.client import ModelClient
-from gear_code.model.responses import extract_output_text
-from gear_code.store.base import ContextStore
+from gear_agent.config import ModelConfig
+from gear_agent.model.client import ModelClient
+from gear_agent.model.responses import extract_output_text
+from gear_agent.store.base import ContextStore
 
 
-COMPACTION_INSTRUCTIONS = "Summarize stored Gear Code session events for future continuation."
+COMPACTION_INSTRUCTIONS = "Summarize stored Gear Agent session events for future continuation."
 
 
 class CompactionService:

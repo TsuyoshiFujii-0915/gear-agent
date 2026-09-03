@@ -16,12 +16,12 @@ from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Input, RichLog, Rule, Static
 
-from gear_code.agent.events import AgentLoopEvent
-from gear_code.agent.compaction import CompactionService
-from gear_code.agent.loop import AgentLoop
-from gear_code.config import ModelConfig, RuntimeConfig
-from gear_code.store.jsonl import JsonlContextStore
-from gear_code.tui import (
+from gear_agent.agent.events import AgentLoopEvent
+from gear_agent.agent.compaction import CompactionService
+from gear_agent.agent.loop import AgentLoop
+from gear_agent.config import ModelConfig, RuntimeConfig
+from gear_agent.store.jsonl import JsonlContextStore
+from gear_agent.tui import (
     ChatLine,
     collect_chat_lines,
     collect_token_usage,
@@ -181,7 +181,7 @@ class AgentProgress(Message):
 
 
 class GearApp(App[None]):
-    """Gear Code interactive TUI powered by Textual."""
+    """Gear Agent interactive TUI powered by Textual."""
 
     CSS = _CSS
 
@@ -341,7 +341,7 @@ class GearApp(App[None]):
                 f"[{_MUTED}]tokens[/{_MUTED}] [{_BRASS}]{format_tokens(self._token_usage)}[/{_BRASS}]",
             ]
         )
-        grid.add_row(f"[bold {_BRASS}]⚙ GEAR CODE[/bold {_BRASS}]", status)
+        grid.add_row(f"[bold {_BRASS}]⚙ GEAR AGENT[/bold {_BRASS}]", status)
         grid.add_row(f"[{_MUTED}]{compact_path(self._workspace)}[/{_MUTED}]", "")
         return grid
 
@@ -356,7 +356,7 @@ class TextualAgentLoopEventSink:
         """Binds the sink to a running app.
 
         Args:
-            app: Gear Code Textual app.
+            app: Gear Agent Textual app.
         """
 
         self._app = app

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gear_code.store.jsonl import JsonlContextStore
+from gear_agent.store.jsonl import JsonlContextStore
 
 
 class StoreTests(unittest.TestCase):

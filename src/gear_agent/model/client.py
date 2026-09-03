@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from gear_code.config import ModelConfig
-from gear_code.model.transport import HttpTransport
+from gear_agent.config import ModelConfig
+from gear_agent.model.transport import HttpTransport
 
 
 class ModelClient:

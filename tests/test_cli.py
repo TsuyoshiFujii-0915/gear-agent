@@ -1,10 +1,16 @@
 import unittest
 from pathlib import Path
 
-from gear_code.cli import _build_parser
+from gear_agent.cli import _build_parser
 
 
 class CliTests(unittest.TestCase):
+    def test_help_uses_gear_agent_branding(self) -> None:
+        help_text = _build_parser().format_help()
+
+        self.assertIn("Gear Agent", help_text)
+        self.assertNotIn("Gear Code", help_text)
+
     def test_discovers_config_by_default(self) -> None:
         args = _build_parser().parse_args([])
 

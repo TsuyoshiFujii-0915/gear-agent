@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 import subprocess
 
-from gear_code.errors import gear_error
+from gear_agent.errors import gear_error
 
 
 class ShellRuntime(ABC):

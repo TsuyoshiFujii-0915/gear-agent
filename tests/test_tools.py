@@ -5,14 +5,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from gear_code.config import ToolConfig, WebFetchConfig, WebSearchConfig
-from gear_code.errors import GearError
-from gear_code.tools.configured import build_configured_tools
-from gear_code.tools.filesystem import FileReadTool, FileWriteTool
-from gear_code.tools.filesystem_search import GlobTool, GrepTool
-from gear_code.tools.registry import ToolRegistry
-from gear_code.tools.runtimes import DockerShellRuntime, ShellRuntime
-from gear_code.tools.shell import ShellTool
+from gear_agent.config import ToolConfig, WebFetchConfig, WebSearchConfig
+from gear_agent.errors import GearError
+from gear_agent.tools.configured import build_configured_tools
+from gear_agent.tools.filesystem import FileReadTool, FileWriteTool
+from gear_agent.tools.filesystem_search import GlobTool, GrepTool
+from gear_agent.tools.registry import ToolRegistry
+from gear_agent.tools.runtimes import DockerShellRuntime, ShellRuntime
+from gear_agent.tools.shell import ShellTool
 
 
 class FakeShellRuntime(ShellRuntime):
@@ -363,7 +363,7 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(schema_names, ["glob", "grep"])
 
     def test_apply_patch_rejects_parent_directory_target(self) -> None:
-        from gear_code.tools.patch import ApplyPatchTool
+        from gear_agent.tools.patch import ApplyPatchTool
 
         with tempfile.TemporaryDirectory() as temp_dir:
             tool = ApplyPatchTool(Path(temp_dir))

@@ -1,6 +1,6 @@
 import unittest
 
-from gear_code.model.responses import extract_function_calls, extract_output_text
+from gear_agent.model.responses import extract_function_calls, extract_output_text
 
 
 class ResponseParsingTests(unittest.TestCase):
