@@ -64,6 +64,7 @@ def build_model_history(events: list[dict[str, Any]]) -> list[object]:
         replay_events = effective_events
 
     seen_call_ids: set[str] = set()
+    preceding_response_assistant_text: str | None = None
     for event in replay_events:
         kind = _required_event_kind(event)
         if kind == "user_input":
@@ -74,21 +75,42 @@ def build_model_history(events: list[dict[str, Any]]) -> list[object]:
                     "content": _required_string(payload, "text", "user_input"),
                 }
             )
+            preceding_response_assistant_text = None
             continue
         if kind == "assistant_message":
             payload = _required_payload(event, kind)
-            input_items.append(
-                {
-                    "role": "assistant",
-                    "content": _required_string(payload, "text", "assistant_message"),
-                }
-            )
+            assistant_text = _required_string(payload, "text", "assistant_message")
+            if preceding_response_assistant_text is None:
+                input_items.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_text,
+                    }
+                )
+            elif assistant_text != preceding_response_assistant_text:
+                raise _shape_error(
+                    (
+                        "assistant_message.text does not match the preceding "
+                        "model_response message output."
+                    ),
+                    "assistant_message",
+                )
+            preceding_response_assistant_text = None
             continue
         if kind == "model_response":
             payload = _required_payload(event, kind)
-            for item in _function_call_items(payload):
-                call_id = _required_string(item, "call_id", "model_response.function_call")
-                seen_call_ids.add(call_id)
+            output_items = _response_output_items(payload)
+            preceding_response_assistant_text = _assistant_output_text(output_items)
+            for item in output_items:
+                item_type = _required_string(item, "type", "model_response.output")
+                if item_type == "function_call":
+                    _validate_function_call_item(item)
+                    call_id = _required_string(
+                        item,
+                        "call_id",
+                        "model_response.function_call",
+                    )
+                    seen_call_ids.add(call_id)
                 input_items.append(item)
             continue
         if kind == "tool_result":
@@ -149,18 +171,52 @@ def _latest_compaction_checkpoint(
     return None
 
 
-def _function_call_items(response: dict[str, Any]) -> list[dict[str, object]]:
+def _response_output_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     output = response.get("output")
     if not isinstance(output, list):
         raise _shape_error("model_response.output must be a list.", "model_response")
-    items: list[dict[str, object]] = []
+    items: list[dict[str, Any]] = []
     for item in output:
         if not isinstance(item, dict):
-            raise _shape_error("model_response.output item must be an object.", "model_response")
-        if item.get("type") == "function_call":
-            _validate_function_call_item(item)
-            items.append(item)
+            raise _shape_error(
+                "model_response.output item must be an object.",
+                "model_response.output",
+            )
+        _required_string(item, "type", "model_response.output")
+        items.append(item)
     return items
+
+
+def _assistant_output_text(items: list[dict[str, Any]]) -> str | None:
+    message_found = False
+    parts: list[str] = []
+    for item in items:
+        if item["type"] != "message":
+            continue
+        message_found = True
+        content = item.get("content")
+        if not isinstance(content, list):
+            raise _shape_error(
+                "model_response message content must be a list.",
+                "model_response.message",
+            )
+        for content_item in content:
+            if not isinstance(content_item, dict):
+                raise _shape_error(
+                    "model_response message content item must be an object.",
+                    "model_response.message",
+                )
+            if content_item.get("type") == "output_text":
+                parts.append(
+                    _required_string(
+                        content_item,
+                        "text",
+                        "model_response.message.output_text",
+                    )
+                )
+    if not message_found:
+        return None
+    return "".join(parts)
 
 
 def _validate_function_call_item(item: dict[str, Any]) -> None:
