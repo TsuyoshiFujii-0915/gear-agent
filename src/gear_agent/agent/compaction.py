@@ -8,6 +8,7 @@ from gear_agent.config import ModelConfig
 from gear_agent.errors import gear_error
 from gear_agent.model.client import ModelClient
 from gear_agent.model.responses import extract_output_text
+from gear_agent.model.replay import strip_opaque_reasoning_from_event
 from gear_agent.store.base import ContextStore
 
 
@@ -40,7 +41,9 @@ class CompactionService:
         """
 
         events = store.load(session_id)
-        prompt = _build_compaction_prompt(select_effective_events(events))
+        effective_events = select_effective_events(events)
+        sanitized_events = _strip_model_response_opaque_reasoning(effective_events)
+        prompt = _build_compaction_prompt(sanitized_events)
         response = self._client.create_response(
             config,
             prompt,
@@ -72,3 +75,21 @@ def _build_compaction_prompt(effective_events: list[dict[str, Any]]) -> str:
             serialized_history,
         ]
     )
+
+
+def _strip_model_response_opaque_reasoning(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sanitized_events: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("kind") != "model_response":
+            sanitized_events.append(event)
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            sanitized_events.append(event)
+            continue
+        sanitized_event = dict(event)
+        sanitized_event["payload"] = strip_opaque_reasoning_from_event(payload)
+        sanitized_events.append(sanitized_event)
+    return sanitized_events

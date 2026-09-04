@@ -2,7 +2,37 @@ import unittest
 from typing import Any
 
 from gear_agent.agent.history import build_model_history
+from gear_agent.config import ReasoningReplayMode
 from gear_agent.errors import GearError
+from gear_agent.model.replay import ModelReplayScope, ReasoningReplayPolicy
+
+
+CURRENT_SCOPE = ModelReplayScope(
+    protocol="responses",
+    endpoint_identity="sha256:ee0291cefbb5b6136483fb38ba9efe9264f9b685d5006c273e293a54b43a1883",
+    model="gpt-5.5",
+)
+
+
+def _policy(mode: ReasoningReplayMode) -> ReasoningReplayPolicy:
+    return ReasoningReplayPolicy(mode=mode, current_scope=CURRENT_SCOPE)
+
+
+def _encrypted_response_payload(
+    output: list[dict[str, Any]],
+    scope: ModelReplayScope,
+) -> dict[str, Any]:
+    return {
+        "response": {"output": output},
+        "source": {
+            "reasoning_replay": "encrypted",
+            "replay_scope": {
+                "protocol": scope.protocol,
+                "endpoint_identity": scope.endpoint_identity,
+                "model": scope.model,
+            },
+        },
+    }
 
 
 class ModelHistoryTests(unittest.TestCase):
@@ -31,15 +61,21 @@ class ModelHistoryTests(unittest.TestCase):
             {"kind": "user_input", "payload": {"text": "hello"}},
             {
                 "kind": "model_response",
-                "payload": {"output": [reasoning_item, message_item, future_item]},
+                "payload": _encrypted_response_payload(
+                    [reasoning_item, message_item, future_item],
+                    CURRENT_SCOPE,
+                ),
             },
             {"kind": "assistant_message", "payload": {"text": "done"}},
         ]
 
-        history = build_model_history(events)
+        history = build_model_history(
+            events,
+            _policy(ReasoningReplayMode.ENCRYPTED),
+        )
 
         self.assertEqual(
-            history,
+            history.items,
             [
                 {"role": "user", "content": "hello"},
                 reasoning_item,
@@ -47,6 +83,8 @@ class ModelHistoryTests(unittest.TestCase):
                 future_item,
             ],
         )
+        self.assertEqual(history.diagnostic.reused_encrypted_items, 1)
+        self.assertEqual(history.diagnostic.dropped_encrypted_items, 0)
 
     def test_replays_multiple_function_calls_and_results_in_conversation_order(
         self,
@@ -101,10 +139,10 @@ class ModelHistoryTests(unittest.TestCase):
             {"kind": "assistant_message", "payload": {"text": "complete"}},
         ]
 
-        history = build_model_history(events)
+        history = build_model_history(events, _policy(ReasoningReplayMode.NONE))
 
         self.assertEqual(
-            history,
+            history.items,
             [
                 reasoning_item,
                 first_call,
@@ -129,10 +167,10 @@ class ModelHistoryTests(unittest.TestCase):
             {"kind": "assistant_message", "payload": {"text": "legacy answer"}},
         ]
 
-        history = build_model_history(events)
+        history = build_model_history(events, _policy(ReasoningReplayMode.NONE))
 
         self.assertEqual(
-            history,
+            history.items,
             [
                 {"role": "user", "content": "legacy request"},
                 {"role": "assistant", "content": "legacy answer"},
@@ -156,10 +194,10 @@ class ModelHistoryTests(unittest.TestCase):
             {"kind": "assistant_message", "payload": {"text": "new answer"}},
         ]
 
-        history = build_model_history(events)
+        history = build_model_history(events, _policy(ReasoningReplayMode.NONE))
 
         self.assertEqual(
-            history,
+            history.items,
             [
                 {
                     "role": "user",
@@ -182,7 +220,7 @@ class ModelHistoryTests(unittest.TestCase):
         ]
 
         with self.assertRaises(GearError) as raised:
-            build_model_history(events)
+            build_model_history(events, _policy(ReasoningReplayMode.NONE))
 
         self.assertEqual(raised.exception.error_type, "history_shape_invalid")
         self.assertEqual(raised.exception.origin, "model_response.output")
@@ -205,11 +243,179 @@ class ModelHistoryTests(unittest.TestCase):
         ]
 
         with self.assertRaises(GearError) as raised:
-            build_model_history(events)
+            build_model_history(events, _policy(ReasoningReplayMode.NONE))
 
         self.assertEqual(raised.exception.error_type, "history_shape_invalid")
         self.assertEqual(raised.exception.origin, "assistant_message")
         self.assertIn("does not match", str(raised.exception))
+
+    def test_drops_only_encrypted_content_when_model_scope_changes(self) -> None:
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "reasoning_1",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": "portable summary"}],
+            "encrypted_content": "opaque-state",
+        }
+        stored_scope = ModelReplayScope(
+            protocol="responses",
+            endpoint_identity=CURRENT_SCOPE.endpoint_identity,
+            model="gpt-5.4",
+        )
+        events = [
+            {
+                "kind": "model_response",
+                "payload": _encrypted_response_payload([reasoning_item], stored_scope),
+            }
+        ]
+
+        history = build_model_history(
+            events,
+            _policy(ReasoningReplayMode.ENCRYPTED),
+        )
+
+        self.assertEqual(
+            history.items,
+            [
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_1",
+                    "status": "completed",
+                    "summary": [
+                        {"type": "summary_text", "text": "portable summary"}
+                    ],
+                }
+            ],
+        )
+        self.assertEqual(history.diagnostic.reused_encrypted_items, 0)
+        self.assertEqual(history.diagnostic.dropped_incompatible_scope_items, 1)
+        self.assertEqual(reasoning_item["encrypted_content"], "opaque-state")
+
+    def test_drops_encrypted_content_when_endpoint_scope_changes(self) -> None:
+        stored_scope = ModelReplayScope(
+            protocol="responses",
+            endpoint_identity="https://gateway.example/v1/responses",
+            model=CURRENT_SCOPE.model,
+        )
+        events = [
+            {
+                "kind": "model_response",
+                "payload": _encrypted_response_payload(
+                    [
+                        {
+                            "type": "reasoning",
+                            "summary": [],
+                            "encrypted_content": "opaque-state",
+                        }
+                    ],
+                    stored_scope,
+                ),
+            }
+        ]
+
+        history = build_model_history(
+            events,
+            _policy(ReasoningReplayMode.ENCRYPTED),
+        )
+
+        self.assertNotIn("encrypted_content", history.items[0])
+        self.assertEqual(history.diagnostic.dropped_incompatible_scope_items, 1)
+
+    def test_treats_legacy_response_without_scope_as_incompatible(self) -> None:
+        events = [
+            {
+                "kind": "model_response",
+                "payload": {
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "summary": [
+                                {"type": "summary_text", "text": "legacy summary"}
+                            ],
+                            "encrypted_content": "legacy-opaque-state",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        history = build_model_history(
+            events,
+            _policy(ReasoningReplayMode.ENCRYPTED),
+        )
+
+        self.assertNotIn("encrypted_content", history.items[0])
+        self.assertEqual(
+            history.items[0]["summary"],
+            [{"type": "summary_text", "text": "legacy summary"}],
+        )
+        self.assertEqual(history.diagnostic.dropped_missing_scope_items, 1)
+
+    def test_disabled_replay_drops_compatible_encrypted_content(self) -> None:
+        events = [
+            {
+                "kind": "model_response",
+                "payload": _encrypted_response_payload(
+                    [
+                        {
+                            "type": "reasoning",
+                            "summary": [],
+                            "encrypted_content": "opaque-state",
+                        }
+                    ],
+                    CURRENT_SCOPE,
+                ),
+            }
+        ]
+
+        history = build_model_history(events, _policy(ReasoningReplayMode.NONE))
+
+        self.assertNotIn("encrypted_content", history.items[0])
+        self.assertEqual(history.diagnostic.dropped_disabled_items, 1)
+
+    def test_compaction_checkpoint_excludes_pre_checkpoint_opaque_state(self) -> None:
+        events = [
+            {
+                "kind": "model_response",
+                "payload": _encrypted_response_payload(
+                    [
+                        {
+                            "type": "reasoning",
+                            "encrypted_content": "pre-checkpoint-opaque",
+                        }
+                    ],
+                    CURRENT_SCOPE,
+                ),
+            },
+            {"kind": "compaction_summary", "payload": {"text": "saved summary"}},
+            {"kind": "user_input", "payload": {"text": "new work"}},
+        ]
+
+        history = build_model_history(
+            events,
+            _policy(ReasoningReplayMode.ENCRYPTED),
+        )
+
+        self.assertNotIn("pre-checkpoint-opaque", str(history.items))
+        self.assertEqual(history.diagnostic.reused_encrypted_items, 0)
+        self.assertEqual(history.diagnostic.dropped_encrypted_items, 0)
+
+    def test_rejects_malformed_model_response_envelope(self) -> None:
+        events = [
+            {
+                "kind": "model_response",
+                "payload": {"response": {"output": []}},
+            }
+        ]
+
+        with self.assertRaises(GearError) as raised:
+            build_model_history(
+                events,
+                _policy(ReasoningReplayMode.ENCRYPTED),
+            )
+
+        self.assertEqual(raised.exception.error_type, "history_shape_invalid")
+        self.assertEqual(raised.exception.origin, "model_response.source")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 import tomllib
 
 from gear_agent.errors import GearError, gear_error
@@ -14,6 +16,7 @@ DEFAULT_CONFIG_TEXT = """[model]
 url = "http://localhost:1234/v1/responses"
 model = "local-model-id"
 api_key_env = ""
+reasoning_replay = "none"
 
 [tool]
 shell_tool = true
@@ -51,6 +54,13 @@ model_timeout_seconds = 120
 """
 
 
+class ReasoningReplayMode(str, Enum):
+    """Configured handling for opaque reasoning state."""
+
+    NONE = "none"
+    ENCRYPTED = "encrypted"
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     """Model endpoint configuration.
@@ -59,11 +69,16 @@ class ModelConfig:
         url: Complete Responses API-compatible endpoint URL.
         model: Model identifier sent in the request body.
         api_key: Bearer token value, or None when no auth header should be sent.
+        reasoning_replay: Explicit opaque reasoning replay mode.
     """
 
     url: str
     model: str
     api_key: str | None
+    reasoning_replay: ReasoningReplayMode
+
+    def __post_init__(self) -> None:
+        _validate_reasoning_replay_url(self.url, self.reasoning_replay)
 
 
 @dataclass(frozen=True)
@@ -211,6 +226,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
     model = _required_string(model_table, "model", "model")
     api_key_env = _required_string(model_table, "api_key_env", "model")
     api_key = _resolve_api_key(api_key_env, environment)
+    reasoning_replay = _load_reasoning_replay(model_table)
     runtime_table = _required_table(raw_data, "runtime")
     runtime = RuntimeConfig(
         workdir=Path(_required_string(runtime_table, "workdir", "runtime")),
@@ -251,7 +267,12 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
     web_search = _load_web_search_config(raw_data, tool.web_search, environment)
     web_fetch = _load_web_fetch_config(raw_data, tool.web_fetch, environment)
     return AppConfig(
-        ModelConfig(url=url, model=model, api_key=api_key),
+        ModelConfig(
+            url=url,
+            model=model,
+            api_key=api_key,
+            reasoning_replay=reasoning_replay,
+        ),
         runtime,
         tool,
         web_search,
@@ -428,6 +449,64 @@ def _required_network(data: dict[str, object]) -> bool:
         "config",
         True,
         {"table": "runtime", "key": "network", "value": value},
+    )
+
+
+def _load_reasoning_replay(
+    data: dict[str, object],
+) -> ReasoningReplayMode:
+    if "reasoning_replay" not in data:
+        return ReasoningReplayMode.NONE
+    value = _required_string(data, "reasoning_replay", "model")
+    try:
+        return ReasoningReplayMode(value)
+    except ValueError as exc:
+        raise gear_error(
+            "config_value_invalid",
+            (
+                "Invalid value for model.reasoning_replay. "
+                "Expected 'none' or 'encrypted'."
+            ),
+            "config",
+            True,
+            {
+                "table": "model",
+                "key": "reasoning_replay",
+                "value": value,
+                "expected": [
+                    ReasoningReplayMode.NONE.value,
+                    ReasoningReplayMode.ENCRYPTED.value,
+                ],
+            },
+        ) from exc
+
+
+def _validate_reasoning_replay_url(
+    url: str,
+    mode: ReasoningReplayMode,
+) -> None:
+    if mode is ReasoningReplayMode.NONE:
+        return
+    parsed_url = urlsplit(url)
+    if (
+        parsed_url.username is None
+        and parsed_url.password is None
+        and parsed_url.fragment == ""
+    ):
+        return
+    raise gear_error(
+        "config_value_invalid",
+        (
+            "model.url must not contain user information or a fragment "
+            "when encrypted reasoning replay is enabled."
+        ),
+        "config",
+        True,
+        {
+            "table": "model",
+            "key": "url",
+            "reason": "replay metadata must not be derived from URL credentials",
+        },
     )
 
 

@@ -6,17 +6,26 @@ from typing import Any
 from gear_agent.agent.events import (
     AgentLoopEventSink,
     ModelRequestStarted,
+    ReasoningReplayEvaluated,
     ToolUseFinished,
     ToolUseStarted,
 )
 from gear_agent.agent.history import build_model_input
-from gear_agent.config import ModelConfig
+from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
 from gear_agent.model.client import ModelClient
 from gear_agent.model.responses import (
     extract_function_calls,
     extract_output_text,
     function_call_output_item,
+)
+from gear_agent.model.replay import (
+    ReasoningReplayDiagnostic,
+    ReasoningReplayPolicy,
+    ReplayedOutput,
+    model_response_event_payload,
+    reasoning_replay_policy,
+    replay_output_items,
 )
 from gear_agent.store.base import ContextStore
 from gear_agent.tools.base import Tool
@@ -67,6 +76,7 @@ class AgentLoop:
     ) -> None:
         self._client = client
         self._config = config
+        self._replay_policy = reasoning_replay_policy(config)
         self._registry = ToolRegistry(tools)
         self._store = store
         self._event_sink = event_sink
@@ -98,12 +108,25 @@ class AgentLoop:
                 True,
                 {"max_iterations": max_iterations},
             )
-        input_items = build_model_input(self._store.load(session_id), user_text)
+        model_input = build_model_input(
+            self._store.load(session_id),
+            user_text,
+            self._replay_policy,
+        )
+        input_items = model_input.items
+        self._publish_replay_diagnostic(session_id, model_input.diagnostic)
         self._store.append(session_id, "user_input", {"text": user_text})
         tools = self._registry.schemas()
         finalization_retry_used = False
+        pending_replay_diagnostic: ReasoningReplayDiagnostic | None = None
 
         for iteration in range(1, max_iterations + 1):
+            if pending_replay_diagnostic is not None:
+                self._publish_replay_diagnostic(
+                    session_id,
+                    pending_replay_diagnostic,
+                )
+                pending_replay_diagnostic = None
             self._event_sink.publish(
                 ModelRequestStarted(session_id=session_id, iteration=iteration)
             )
@@ -114,7 +137,16 @@ class AgentLoop:
                 AGENT_INSTRUCTIONS,
                 timeout_seconds,
             )
-            self._store.append(session_id, "model_response", response)
+            self._store.append(
+                session_id,
+                "model_response",
+                model_response_event_payload(response, self._replay_policy),
+            )
+            replayed_output = _current_response_output(
+                response,
+                self._replay_policy,
+            )
+            output_items = replayed_output.items
             function_calls = extract_function_calls(response)
             if len(function_calls) == 0:
                 final_text = extract_output_text(response)
@@ -123,12 +155,15 @@ class AgentLoop:
                     return TurnResult(final_text=final_text, iterations=iteration)
                 if not finalization_retry_used and iteration < max_iterations:
                     finalization_retry_used = True
-                    input_items.extend(_output_items(response))
+                    input_items.extend(output_items)
                     input_items.append(
                         {
                             "role": "user",
                             "content": FINALIZATION_RETRY_INSTRUCTION,
                         }
+                    )
+                    pending_replay_diagnostic = _nonempty_replay_diagnostic(
+                        replayed_output.diagnostic
                     )
                     continue
                 raise gear_error(
@@ -139,7 +174,10 @@ class AgentLoop:
                     {"iteration": iteration, "retry_used": finalization_retry_used},
                 )
 
-            input_items.extend(_output_items(response))
+            input_items.extend(output_items)
+            pending_replay_diagnostic = _nonempty_replay_diagnostic(
+                replayed_output.diagnostic
+            )
             for function_call in function_calls:
                 self._store.append(
                     session_id,
@@ -195,8 +233,48 @@ class AgentLoop:
             {"max_iterations": max_iterations},
         )
 
+    def _publish_replay_diagnostic(
+        self,
+        session_id: str,
+        diagnostic: ReasoningReplayDiagnostic,
+    ) -> None:
+        self._event_sink.publish(
+            ReasoningReplayEvaluated(
+                session_id=session_id,
+                mode=self._replay_policy.mode,
+                reused_encrypted_items=diagnostic.reused_encrypted_items,
+                dropped_disabled_items=diagnostic.dropped_disabled_items,
+                dropped_incompatible_scope_items=(
+                    diagnostic.dropped_incompatible_scope_items
+                ),
+                dropped_missing_scope_items=diagnostic.dropped_missing_scope_items,
+            )
+        )
 
-def _output_items(response: dict[str, Any]) -> list[object]:
+
+def _current_response_output(
+    response: dict[str, Any],
+    replay_policy: ReasoningReplayPolicy,
+) -> ReplayedOutput:
+    output_items = _output_items(response)
+    source_scope = None
+    if replay_policy.mode is ReasoningReplayMode.ENCRYPTED:
+        source_scope = replay_policy.current_scope
+    return replay_output_items(output_items, source_scope, replay_policy)
+
+
+def _nonempty_replay_diagnostic(
+    diagnostic: ReasoningReplayDiagnostic,
+) -> ReasoningReplayDiagnostic | None:
+    handled_items = (
+        diagnostic.reused_encrypted_items + diagnostic.dropped_encrypted_items
+    )
+    if handled_items == 0:
+        return None
+    return diagnostic
+
+
+def _output_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     output = response.get("output")
     if not isinstance(output, list):
         raise gear_error(
@@ -206,7 +284,18 @@ def _output_items(response: dict[str, Any]) -> list[object]:
             True,
             {},
         )
-    return output
+    items: list[dict[str, Any]] = []
+    for item in output:
+        if not isinstance(item, dict):
+            raise gear_error(
+                "response_shape_invalid",
+                "Response output item is not an object.",
+                "agent_loop",
+                True,
+                {},
+            )
+        items.append(item)
+    return items
 
 
 def _has_final_text(text: str) -> bool:

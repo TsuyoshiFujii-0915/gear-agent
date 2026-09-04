@@ -2,7 +2,7 @@ import unittest
 from typing import Any
 
 from gear_agent.agent.compaction import CompactionService
-from gear_agent.config import ModelConfig
+from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError
 from gear_agent.model.client import ModelClient
 from gear_agent.model.transport import HttpTransport
@@ -26,6 +26,65 @@ class CompactionTransport(HttpTransport):
 
 
 class CompactionTests(unittest.TestCase):
+    def test_compaction_prompt_omits_opaque_reasoning_state(self) -> None:
+        transport = CompactionTransport(
+            [
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "summary"}],
+                        }
+                    ]
+                }
+            ]
+        )
+        stored_payload = {
+            "response": {
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "portable summary"}
+                        ],
+                        "encrypted_content": "opaque-state",
+                    }
+                ]
+            },
+            "source": {
+                "reasoning_replay": "encrypted",
+                "replay_scope": {
+                    "protocol": "responses",
+                    "endpoint_identity": "sha256:ee0291cefbb5b6136483fb38ba9efe9264f9b685d5006c273e293a54b43a1883",
+                    "model": "gpt-5.5",
+                },
+            },
+        }
+        store = MemoryContextStore()
+        store.append("session-1", "model_response", stored_payload)
+        config = ModelConfig(
+            url="https://api.openai.com/v1/responses",
+            model="gpt-5.5",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.ENCRYPTED,
+        )
+
+        CompactionService(ModelClient(transport)).compact(
+            "session-1",
+            store,
+            config,
+            30,
+        )
+
+        self.assertNotIn("opaque-state", transport.payloads[0]["input"])
+        self.assertIn("portable summary", transport.payloads[0]["input"])
+        self.assertEqual(
+            store.events[0]["payload"]["response"]["output"][0][
+                "encrypted_content"
+            ],
+            "opaque-state",
+        )
+
     def test_compacts_existing_events_into_summary_event(self) -> None:
         transport = CompactionTransport(
             [
@@ -46,6 +105,7 @@ class CompactionTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         summary = service.compact("session-1", store, config, 30)
@@ -84,6 +144,7 @@ class CompactionTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         first_summary = service.compact("session-1", store, config, 30)
@@ -119,6 +180,7 @@ class CompactionTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         with self.assertRaises(GearError):
@@ -146,6 +208,7 @@ class CompactionTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         with self.assertRaises(GearError) as raised:
@@ -179,6 +242,7 @@ class CompactionTests(unittest.TestCase):
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
         )
 
         service.compact("session-1", store, config, 30)
