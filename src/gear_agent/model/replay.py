@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 from typing import Any
+from urllib.parse import unquote_plus, urlsplit
 
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
@@ -136,7 +138,7 @@ def reasoning_replay_policy(config: ModelConfig) -> ReasoningReplayPolicy:
         mode=config.reasoning_replay,
         current_scope=ModelReplayScope(
             protocol=RESPONSES_PROTOCOL,
-            endpoint_identity=_endpoint_identity(config.url),
+            endpoint_identity=_endpoint_identity(config.url, config.api_key),
             model=config.model,
         ),
     )
@@ -322,9 +324,37 @@ def strip_opaque_reasoning_from_event(
     return copied_payload
 
 
-def _endpoint_identity(url: str) -> str:
-    digest = sha256(url.encode("utf-8")).hexdigest()
+def _endpoint_identity(url: str, api_key: str | None) -> str:
+    identity_material = _endpoint_identity_material(url, api_key)
+    digest = sha256(identity_material.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
+
+def _endpoint_identity_material(url: str, api_key: str | None) -> str:
+    if api_key is None or api_key == "":
+        return url
+
+    parsed_url = urlsplit(url)
+    query_components = parsed_url.query.split("&") if parsed_url.query else []
+    components = [
+        _credential_free_component(parsed_url.scheme, api_key),
+        _credential_free_component(parsed_url.netloc, api_key),
+        _credential_free_component(parsed_url.path, api_key),
+        *[
+            _credential_free_component(component, api_key)
+            for component in query_components
+        ],
+        _credential_free_component(parsed_url.fragment, api_key),
+    ]
+    if all(kind == "literal" for kind, _ in components):
+        return url
+    return json.dumps(components, ensure_ascii=True, separators=(",", ":"))
+
+
+def _credential_free_component(value: str, api_key: str) -> tuple[str, str]:
+    if api_key in unquote_plus(value):
+        return ("credential", "")
+    return ("literal", value)
 
 
 def _is_model_response_envelope(payload: dict[str, Any]) -> bool:

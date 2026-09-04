@@ -59,7 +59,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(raised.exception.details["key"], "reasoning_replay")
             self.assertEqual(raised.exception.details["value"], "automatic")
 
-    def test_rejects_missing_reasoning_replay_mode(self) -> None:
+    def test_loads_legacy_config_without_reasoning_replay_as_none(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "gear.toml"
             config_path.write_text(
@@ -67,12 +67,40 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaises(GearError) as raised:
-                load_config(config_path, {})
+            config = load_config(config_path, {})
 
-            self.assertEqual(raised.exception.error_type, "config_value_invalid")
-            self.assertEqual(raised.exception.origin, "config")
-            self.assertIn("model.reasoning_replay", raised.exception.message)
+            self.assertEqual(
+                config.model.reasoning_replay,
+                ReasoningReplayMode.NONE,
+            )
+
+    def test_allows_query_endpoint_for_encrypted_reasoning_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace(
+                    'url = "http://localhost:1234/v1/responses"',
+                    (
+                        'url = "https://azure.example/openai/v1/responses'
+                        '?api-version=v1"'
+                    ),
+                ).replace(
+                    'reasoning_replay = "none"',
+                    'reasoning_replay = "encrypted"',
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path, {})
+
+            self.assertEqual(
+                config.model.reasoning_replay,
+                ReasoningReplayMode.ENCRYPTED,
+            )
+            self.assertEqual(
+                config.model.url,
+                "https://azure.example/openai/v1/responses?api-version=v1",
+            )
 
     def test_loads_openai_api_key_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

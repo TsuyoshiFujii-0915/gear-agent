@@ -4,7 +4,7 @@ Scope Encrypted Reasoning Replay to an Exact Configured Connection
 
 # Status
 
-accepted
+superseded by ADR-0010
 
 # Context
 

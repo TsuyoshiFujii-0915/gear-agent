@@ -144,17 +144,21 @@ model_timeout_seconds = 120
 `api_key_env` が空文字の場合、認証ヘッダーは送信しません。
 環境変数名が指定されているのに値が存在しない場合は、設定エラーとして起動時に失敗します。
 
-`reasoning_replay` は必須で、`none` または `encrypted` を指定します。
+`reasoning_replay` は `none` または `encrypted` を指定します。
 `none` は opaque な reasoning state を要求・再送しません。`encrypted` は Responses リクエストへ
 `include = ["reasoning.encrypted_content"]` 相当の指定を加え、暗号化された reasoning item を
-手動履歴で再送します。未対応値や設定欠落は設定ロード時に失敗します。
+手動履歴で再送します。既存の設定との互換性のため、設定欠落時は `none` として
+読み込みます。明示した未対応値は設定ロード時に失敗します。
 
-暗号化された state は、protocol、設定 endpoint URL の SHA-256 identity、model ID が保存時と
-現在で完全一致する場合にだけ再利用されます。endpoint または model を変更した場合や、scope
+暗号化された state は、protocol、credential を除いた設定 endpoint URL の SHA-256
+identity、model ID が保存時と現在で完全一致する場合にだけ再利用されます。endpoint
+または model を変更した場合や、scope
 metadata を持たない旧JSONLセッションでは `encrypted_content` のみをモデル入力から除去し、
 reasoning summary、メッセージ、ツール履歴は維持します。保存済みJSONL自体は変更しません。
-`encrypted` の場合、credential の派生値をscope metadataへ保存しないため、userinfo、query、
-fragment を含むendpoint URLは設定エラーとして拒否します。
+query はendpoint identityに含めますが、設定した API key を含むquery componentは
+固定表現に置き換えてから計算します。そのため、Azure Responses API の `api-version`
+のようなqueryは利用でき、credential の派生値はscope metadataに残りません。userinfoと
+fragment を含むendpoint URLは、`encrypted` の場合は設定エラーとして拒否します。
 この設定は OpenAI Responses API の
 [`reasoning.encrypted_content`](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
 に対応しています。

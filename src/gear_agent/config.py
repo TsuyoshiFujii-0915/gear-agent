@@ -226,7 +226,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
     model = _required_string(model_table, "model", "model")
     api_key_env = _required_string(model_table, "api_key_env", "model")
     api_key = _resolve_api_key(api_key_env, environment)
-    reasoning_replay = _required_reasoning_replay(model_table)
+    reasoning_replay = _load_reasoning_replay(model_table)
     runtime_table = _required_table(raw_data, "runtime")
     runtime = RuntimeConfig(
         workdir=Path(_required_string(runtime_table, "workdir", "runtime")),
@@ -452,9 +452,11 @@ def _required_network(data: dict[str, object]) -> bool:
     )
 
 
-def _required_reasoning_replay(
+def _load_reasoning_replay(
     data: dict[str, object],
 ) -> ReasoningReplayMode:
+    if "reasoning_replay" not in data:
+        return ReasoningReplayMode.NONE
     value = _required_string(data, "reasoning_replay", "model")
     try:
         return ReasoningReplayMode(value)
@@ -489,14 +491,13 @@ def _validate_reasoning_replay_url(
     if (
         parsed_url.username is None
         and parsed_url.password is None
-        and parsed_url.query == ""
         and parsed_url.fragment == ""
     ):
         return
     raise gear_error(
         "config_value_invalid",
         (
-            "model.url must not contain user information, a query, or a fragment "
+            "model.url must not contain user information or a fragment "
             "when encrypted reasoning replay is enabled."
         ),
         "config",
