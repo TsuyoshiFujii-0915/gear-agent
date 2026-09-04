@@ -27,6 +27,7 @@ class CompactionService:
         store: ContextStore,
         config: ModelConfig,
         timeout_seconds: int,
+        stream_idle_timeout_seconds: int | None = None,
     ) -> str:
         """Compacts existing session events into a summary.
 
@@ -35,6 +36,7 @@ class CompactionService:
             store: Context store.
             config: Model endpoint configuration.
             timeout_seconds: Request timeout in seconds.
+            stream_idle_timeout_seconds: Maximum idle time between stream bytes.
 
         Returns:
             Summary text.
@@ -50,6 +52,7 @@ class CompactionService:
             [],
             COMPACTION_INSTRUCTIONS,
             timeout_seconds,
+            stream_idle_timeout_seconds,
         )
         summary = extract_output_text(response)
         if summary.strip() == "":

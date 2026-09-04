@@ -87,6 +87,7 @@ class AgentLoop:
         user_text: str,
         max_iterations: int,
         timeout_seconds: int,
+        stream_idle_timeout_seconds: int | None = None,
     ) -> TurnResult:
         """Runs one user turn until final text or explicit failure.
 
@@ -95,6 +96,7 @@ class AgentLoop:
             user_text: User message.
             max_iterations: Maximum model calls for this turn.
             timeout_seconds: HTTP timeout for each model call.
+            stream_idle_timeout_seconds: Maximum idle time between stream bytes.
 
         Returns:
             Turn result.
@@ -136,6 +138,7 @@ class AgentLoop:
                 tools,
                 AGENT_INSTRUCTIONS,
                 timeout_seconds,
+                stream_idle_timeout_seconds,
             )
             self._store.append(
                 session_id,

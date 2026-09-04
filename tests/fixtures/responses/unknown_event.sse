@@ -1,0 +1,7 @@
+data: {"type":"response.created","response":{"id":"resp_unknown","status":"in_progress","output":[]}}
+
+data: {"type":"response.future_metadata.delta","provider_extension":{"value":1}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_unknown","status":"completed"}}

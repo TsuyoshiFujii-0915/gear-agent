@@ -11,7 +11,7 @@ Codex の中核動作を理解しやすい Python コードとして表現する
 - Textual による対話型 TUI
 - `uv` によるプロジェクト実行
 - `gear` コマンドによる起動
-- Responses API 互換の non-stream HTTP POST
+- Responses API 互換の JSON / SSE HTTP POST
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
 - ファイル読み取り、ファイル書き込み、シェル実行、パッチ適用ツール
@@ -61,6 +61,7 @@ url = "http://localhost:1234/v1/responses"
 model = "local-model-id"
 api_key_env = ""
 reasoning_replay = "none"
+stream = false
 
 [tool]
 shell_tool = true
@@ -95,6 +96,7 @@ session_dir = ".gear/sessions"
 network = "disabled"
 max_iterations = 8
 model_timeout_seconds = 120
+model_stream_idle_timeout_seconds = 60
 ```
 
 OpenAI の Responses API を使う例です。`model` は利用可能なモデル ID に置き換えてください。
@@ -105,6 +107,7 @@ url = "https://api.openai.com/v1/responses"
 model = "gpt-5.5"
 api_key_env = "OPENAI_API_KEY"
 reasoning_replay = "encrypted"
+stream = true
 
 [tool]
 shell_tool = true
@@ -139,10 +142,23 @@ session_dir = ".gear/sessions"
 network = "disabled"
 max_iterations = 8
 model_timeout_seconds = 120
+model_stream_idle_timeout_seconds = 60
 ```
 
 `api_key_env` が空文字の場合、認証ヘッダーは送信しません。
 環境変数名が指定されているのに値が存在しない場合は、設定エラーとして起動時に失敗します。
+
+`stream = true` は Responses API のtyped SSE eventsを逐次受信し、モデル層で完成済みの
+Responses objectへ組み立ててからAgentLoopへ返します。`false` は従来のJSON responseを
+使用します。既存設定との互換性のため、`stream` 欠落時は `false` です。
+streamingを有効にする場合、`runtime.model_stream_idle_timeout_seconds` は必須です。
+これはstream bytesを受信しない最大秒数で、接続・書き込み等に使う
+`model_timeout_seconds` とは独立しています。途中切断、idle timeout、terminal errorから
+non-stream requestへの自動再送は行いません。
+
+OpenAI、Bearer token認証を受け付けるAzure OpenAI、LM Studio等で同じResponses SSE
+event schemaが提供される場合はprovider固有分岐なしで処理します。未知の追加eventは無視しますが、`response.failed`、
+`response.incomplete`、`error`、成功terminal前のEOFは明示的なエラーになります。
 
 `reasoning_replay` は `none` または `encrypted` を指定します。
 `none` は opaque な reasoning state を要求・再送しません。`encrypted` は Responses リクエストへ
@@ -291,7 +307,9 @@ Shell tool の Docker image はコード側で `python:3.11-slim` に固定し�
 |       |-- errors.py
 |       |-- model/
 |       |   |-- client.py
+|       |   |-- events.py
 |       |   |-- responses.py
+|       |   |-- streaming.py
 |       |   `-- transport.py
 |       |-- store/
 |       |   |-- base.py
@@ -330,7 +348,8 @@ uv run python -m unittest discover -s tests
 ## 設計方針
 
 - Responses API 互換エンドポイントへ、指定された URL、モデル、入力を明示的に送信します。
-- stream 出力は扱わず、`stream = false` の non-stream リクエストだけを送ります。
+- `model.stream` によりnon-stream JSONとSSE streamingを明示的に選択します。
+- streamingでもAgentLoopには1つのcanonical completed responseだけを返します。
 - プロバイダごとの互換差分を自動吸収しません。
 - Responses API で失敗した場合に Chat Completions API へ切り替えません。
 - Docker が使えない場合にローカル実行へ暗黙フォールバックしません。

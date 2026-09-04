@@ -1,0 +1,13 @@
+data: {"type":"response.created","response":{"id":"resp_tool","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"","status":"in_progress"}}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"command\":\"ec"}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"ho hi\",\"workdir\":\".\"}"}
+
+data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\"command\":\"echo hi\",\"workdir\":\".\"}"}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"echo hi\",\"workdir\":\".\"}","status":"completed"}}
+
+data: {"type":"response.completed","response":{"id":"resp_tool","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"echo hi\",\"workdir\":\".\"}","status":"completed"}]}}
