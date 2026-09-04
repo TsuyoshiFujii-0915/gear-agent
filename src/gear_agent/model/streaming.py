@@ -9,7 +9,8 @@ from gear_agent.model.events import (
     ModelFunctionCallArgumentsDelta,
     ModelOutputItemCompleted,
     ModelProgressEventSink,
-    ModelReasoningDelta,
+    ModelReasoningSummaryDelta,
+    ModelReasoningTextDelta,
     ModelTextDelta,
 )
 
@@ -181,7 +182,14 @@ class ResponsesStreamAssembler:
         if state is not None:
             fragments = _reasoning_fragments(state, event)
             fragments.setdefault(reasoning_index, []).append(delta)
-        self._progress_sink.publish(ModelReasoningDelta(delta=delta))
+        event_type = event["type"]
+        if event_type == "response.reasoning_summary_text.delta":
+            self._progress_sink.publish(ModelReasoningSummaryDelta(delta=delta))
+            return
+        if event_type == "response.reasoning_text.delta":
+            self._progress_sink.publish(ModelReasoningTextDelta(delta=delta))
+            return
+        raise _event_error("Unsupported reasoning delta event type.", event)
 
     def _consume_reasoning_done(self, event: dict[str, Any]) -> None:
         text = _required_string(event, "text")

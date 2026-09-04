@@ -12,7 +12,8 @@ from gear_agent.model.events import (
     ModelFunctionCallArgumentsDelta,
     ModelOutputItemCompleted,
     ModelProgressEvent,
-    ModelReasoningDelta,
+    ModelReasoningSummaryDelta,
+    ModelReasoningTextDelta,
     ModelTextDelta,
 )
 from gear_agent.model.responses import extract_function_calls, extract_output_text
@@ -112,13 +113,33 @@ class ResponsesStreamTests(unittest.TestCase):
 
         self.assertEqual(extract_output_text(response), "Done")
         reasoning_events = [
-            event for event in sink.events if isinstance(event, ModelReasoningDelta)
+            event
+            for event in sink.events
+            if isinstance(event, ModelReasoningSummaryDelta)
         ]
         completed_events = [
             event for event in sink.events if isinstance(event, ModelOutputItemCompleted)
         ]
         self.assertEqual([event.delta for event in reasoning_events], ["Inspecting"])
         self.assertEqual([event.output_index for event in completed_events], [0, 1])
+
+    def test_distinguishes_private_reasoning_text_from_reasoning_summary(self) -> None:
+        response, _, sink = create_streamed_response("reasoning_raw_text.sse")
+
+        reasoning_item = response["output"][0]
+        self.assertEqual(reasoning_item["content"][0]["text"], "Private reasoning")
+        private_events = [
+            event
+            for event in sink.events
+            if isinstance(event, ModelReasoningTextDelta)
+        ]
+        summary_events = [
+            event
+            for event in sink.events
+            if isinstance(event, ModelReasoningSummaryDelta)
+        ]
+        self.assertEqual([event.delta for event in private_events], ["Private reasoning"])
+        self.assertEqual(summary_events, [])
 
     def test_assembles_fragmented_function_arguments_without_partial_json_parse(self) -> None:
         response, _, sink = create_streamed_response("fragmented_tool.sse")

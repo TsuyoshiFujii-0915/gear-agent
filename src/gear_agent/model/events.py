@@ -12,8 +12,15 @@ class ModelTextDelta:
 
 
 @dataclass(frozen=True)
-class ModelReasoningDelta:
-    """Provider-neutral reasoning text progress."""
+class ModelReasoningSummaryDelta:
+    """Provider-neutral displayable reasoning summary progress."""
+
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelReasoningTextDelta:
+    """Provider-neutral private reasoning text progress."""
 
     delta: str
 
@@ -37,7 +44,8 @@ class ModelOutputItemCompleted:
 
 ModelProgressEvent: TypeAlias = (
     ModelTextDelta
-    | ModelReasoningDelta
+    | ModelReasoningSummaryDelta
+    | ModelReasoningTextDelta
     | ModelFunctionCallArgumentsDelta
     | ModelOutputItemCompleted
 )
