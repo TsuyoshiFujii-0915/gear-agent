@@ -18,7 +18,7 @@ from gear_agent.config import (
 )
 from gear_agent.errors import GearError
 from gear_agent.model.client import ModelClient
-from gear_agent.model.transport import UrllibHttpTransport
+from gear_agent.model.transport import HttpxHttpTransport
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.store.sessions import JsonlSessionDiscovery
 from gear_agent.tools.configured import build_configured_tools
@@ -122,13 +122,13 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
     )
     event_sink = TextualAgentLoopEventSink()
     loop = AgentLoop(
-        ModelClient(UrllibHttpTransport()),
+        ModelClient(HttpxHttpTransport()),
         config.model,
         tools,
         store,
         event_sink,
     )
-    compaction = CompactionService(ModelClient(UrllibHttpTransport()))
+    compaction = CompactionService(ModelClient(HttpxHttpTransport()))
     app = GearApp(
         model=config.model.model,
         session_id=session_id,
@@ -200,6 +200,9 @@ def _runtime_from_args(runtime: RuntimeConfig, args: Namespace) -> RuntimeConfig
             args.model_timeout_seconds
             if args.model_timeout_seconds is not None
             else runtime.model_timeout_seconds
+        ),
+        model_stream_idle_timeout_seconds=(
+            runtime.model_stream_idle_timeout_seconds
         ),
     )
 

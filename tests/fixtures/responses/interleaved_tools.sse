@@ -1,0 +1,21 @@
+data: {"type":"response.created","response":{"id":"resp_tools","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_a","type":"function_call","call_id":"call_a","name":"echo","arguments":"","status":"in_progress"}}
+
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_b","type":"function_call","call_id":"call_b","name":"echo","arguments":"","status":"in_progress"}}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":"{\"text\":"}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":1,"delta":"{\"text\":\"B\"}"}
+
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":"\"A\"}"}
+
+data: {"type":"response.function_call_arguments.done","item_id":"fc_b","output_index":1,"arguments":"{\"text\":\"B\"}"}
+
+data: {"type":"response.function_call_arguments.done","item_id":"fc_a","output_index":0,"arguments":"{\"text\":\"A\"}"}
+
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_b","type":"function_call","call_id":"call_b","name":"echo","arguments":"{\"text\":\"B\"}","status":"completed"}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_a","type":"function_call","call_id":"call_a","name":"echo","arguments":"{\"text\":\"A\"}","status":"completed"}}
+
+data: {"type":"response.completed","response":{"id":"resp_tools","status":"completed"}}

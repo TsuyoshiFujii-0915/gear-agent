@@ -14,6 +14,89 @@ from gear_agent.errors import GearError
 
 
 class ConfigTests(unittest.TestCase):
+    def test_loads_explicit_streaming_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace("stream = false", "stream = true"),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path, {})
+
+            self.assertTrue(config.model.stream)
+            self.assertEqual(config.runtime.model_stream_idle_timeout_seconds, 60)
+
+    def test_legacy_config_preserves_non_stream_mode_without_idle_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace("stream = false\n", "").replace(
+                    "model_stream_idle_timeout_seconds = 60\n",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path, {})
+
+            self.assertFalse(config.model.stream)
+            self.assertIsNone(config.runtime.model_stream_idle_timeout_seconds)
+
+    def test_streaming_requires_explicit_idle_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace("stream = false", "stream = true").replace(
+                    "model_stream_idle_timeout_seconds = 60\n",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(GearError) as raised:
+                load_config(config_path, {})
+
+            self.assertEqual(raised.exception.error_type, "config_value_invalid")
+            self.assertEqual(
+                raised.exception.details["key"],
+                "model_stream_idle_timeout_seconds",
+            )
+
+    def test_rejects_invalid_explicit_stream_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace("stream = false", 'stream = "yes"'),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(GearError) as raised:
+                load_config(config_path, {})
+
+            self.assertEqual(raised.exception.error_type, "config_value_invalid")
+            self.assertEqual(raised.exception.details["key"], "stream")
+
+    def test_rejects_invalid_explicit_stream_idle_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "gear.toml"
+            config_path.write_text(
+                DEFAULT_CONFIG_TEXT.replace(
+                    "model_stream_idle_timeout_seconds = 60",
+                    "model_stream_idle_timeout_seconds = 0",
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(GearError) as raised:
+                load_config(config_path, {})
+
+            self.assertEqual(raised.exception.error_type, "config_value_invalid")
+            self.assertEqual(
+                raised.exception.details["key"],
+                "model_stream_idle_timeout_seconds",
+            )
+
     def test_loads_explicit_reasoning_replay_modes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "gear.toml"

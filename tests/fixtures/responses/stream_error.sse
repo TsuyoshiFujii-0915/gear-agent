@@ -1,0 +1,5 @@
+data: {"type":"response.created","response":{"id":"resp_error","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}
+
+data: {"type":"error","code":"server_error","message":"provider stream failed","param":null}

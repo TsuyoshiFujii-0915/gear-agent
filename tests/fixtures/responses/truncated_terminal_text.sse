@@ -1,0 +1,5 @@
+data: {"type":"response.created","response":{"id":"resp_truncated_text","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"complete answer","annotations":[]}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_truncated_text","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"complete ans","annotations":[]}]}]}}

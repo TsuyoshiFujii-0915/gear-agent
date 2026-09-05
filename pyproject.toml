@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "A minimal educational coding agent using Responses API-compatible endpoints."
 requires-python = ">=3.11"
 dependencies = [
+    "httpx>=0.28.1,<1.0",
+    "httpx-sse>=0.4.3,<0.5",
     "textual>=8.2.6",
 ]
 

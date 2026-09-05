@@ -1,0 +1,11 @@
+data: {"type":"response.created","response":{"id":"resp_reasoning_text","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"in_progress","summary":[],"content":[]}}
+
+data: {"type":"response.reasoning_text.delta","item_id":"rs_1","output_index":0,"content_index":0,"delta":"Private reasoning"}
+
+data: {"type":"response.reasoning_text.done","item_id":"rs_1","output_index":0,"content_index":0,"text":"Private reasoning"}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"Private reasoning"}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_reasoning_text","status":"completed","output":[{"id":"rs_1","type":"reasoning","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"Private reasoning"}]}]}}

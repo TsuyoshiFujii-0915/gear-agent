@@ -17,6 +17,7 @@ url = "http://localhost:1234/v1/responses"
 model = "local-model-id"
 api_key_env = ""
 reasoning_replay = "none"
+stream = false
 
 [tool]
 shell_tool = true
@@ -51,6 +52,7 @@ session_dir = ".gear/sessions"
 network = "disabled"
 max_iterations = 8
 model_timeout_seconds = 120
+model_stream_idle_timeout_seconds = 60
 """
 
 
@@ -70,12 +72,14 @@ class ModelConfig:
         model: Model identifier sent in the request body.
         api_key: Bearer token value, or None when no auth header should be sent.
         reasoning_replay: Explicit opaque reasoning replay mode.
+        stream: Whether to request an SSE response stream.
     """
 
     url: str
     model: str
     api_key: str | None
     reasoning_replay: ReasoningReplayMode
+    stream: bool = False
 
     def __post_init__(self) -> None:
         _validate_reasoning_replay_url(self.url, self.reasoning_replay)
@@ -160,6 +164,8 @@ class RuntimeConfig:
         network_enabled: Whether sandbox shell commands can access the network.
         max_iterations: Maximum model calls per user turn.
         model_timeout_seconds: Model request timeout in seconds.
+        model_stream_idle_timeout_seconds: Maximum idle time between model
+            stream bytes, or None when omitted for non-stream mode.
     """
 
     workdir: Path
@@ -167,6 +173,7 @@ class RuntimeConfig:
     network_enabled: bool
     max_iterations: int
     model_timeout_seconds: int
+    model_stream_idle_timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
     api_key_env = _required_string(model_table, "api_key_env", "model")
     api_key = _resolve_api_key(api_key_env, environment)
     reasoning_replay = _load_reasoning_replay(model_table)
+    stream = _load_model_stream(model_table)
     runtime_table = _required_table(raw_data, "runtime")
     runtime = RuntimeConfig(
         workdir=Path(_required_string(runtime_table, "workdir", "runtime")),
@@ -237,6 +245,10 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
             runtime_table,
             "model_timeout_seconds",
             "runtime",
+        ),
+        model_stream_idle_timeout_seconds=_load_model_stream_idle_timeout(
+            runtime_table,
+            stream,
         ),
     )
     tool_table = _required_table(raw_data, "tool")
@@ -272,6 +284,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
             model=model,
             api_key=api_key,
             reasoning_replay=reasoning_replay,
+            stream=stream,
         ),
         runtime,
         tool,
@@ -479,6 +492,30 @@ def _load_reasoning_replay(
                 ],
             },
         ) from exc
+
+
+def _load_model_stream(data: dict[str, object]) -> bool:
+    if "stream" not in data:
+        return False
+    return _required_bool(data, "stream", "model")
+
+
+def _load_model_stream_idle_timeout(
+    data: dict[str, object],
+    stream: bool,
+) -> int | None:
+    key = "model_stream_idle_timeout_seconds"
+    if key in data:
+        return _required_positive_int(data, key, "runtime")
+    if stream:
+        raise gear_error(
+            "config_value_invalid",
+            f"Missing or invalid positive integer value: runtime.{key}",
+            "config",
+            True,
+            {"table": "runtime", "key": key},
+        )
+    return None
 
 
 def _validate_reasoning_replay_url(

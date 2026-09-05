@@ -253,6 +253,7 @@ class GearApp(App[None]):
                 user_text,
                 self._runtime.max_iterations,
                 self._runtime.model_timeout_seconds,
+                self._runtime.model_stream_idle_timeout_seconds,
             )
         except Exception as exc:
             self._store.append(self._session_id, "turn_error", {"text": str(exc)})
@@ -267,6 +268,7 @@ class GearApp(App[None]):
                 self._store,
                 self._model_config,
                 self._runtime.model_timeout_seconds,
+                self._runtime.model_stream_idle_timeout_seconds,
             )
         except Exception as exc:
             self._store.append(self._session_id, "turn_error", {"text": str(exc)})

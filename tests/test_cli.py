@@ -115,6 +115,7 @@ class CliTests(unittest.TestCase):
                 network_enabled=False,
                 max_iterations=8,
                 model_timeout_seconds=120,
+                model_stream_idle_timeout_seconds=45,
             )
             args = _build_parser().parse_args(
                 ["--session-dir", str(overridden_session_dir), "resume", "--latest"]
@@ -124,6 +125,7 @@ class CliTests(unittest.TestCase):
             session_id = _session_id_from_args(args, runtime.session_dir)
 
             self.assertEqual(session_id, "overridden-session")
+            self.assertEqual(runtime.model_stream_idle_timeout_seconds, 45)
 
 
 if __name__ == "__main__":
