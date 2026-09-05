@@ -171,6 +171,19 @@ class ResponsesStreamTests(unittest.TestCase):
         self.assertEqual(response["id"], "resp_tools")
         self.assertEqual(response["status"], "completed")
 
+    def test_uses_completed_tool_item_when_terminal_arguments_are_truncated(self) -> None:
+        response, _, _ = create_streamed_response("truncated_terminal_tool.sse")
+
+        calls = extract_function_calls(response)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].arguments, {"command": "echo hi"})
+
+    def test_uses_completed_message_item_when_terminal_text_is_truncated(self) -> None:
+        response, _, _ = create_streamed_response("truncated_terminal_text.sse")
+
+        self.assertEqual(extract_output_text(response), "complete answer")
+
     def test_unknown_event_does_not_break_valid_stream(self) -> None:
         response, _, _ = create_streamed_response("unknown_event.sse")
 

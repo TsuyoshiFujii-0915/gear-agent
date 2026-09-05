@@ -438,8 +438,11 @@ def _value_covers_completed_item(
             )
         )
     if isinstance(completed_value, str):
-        return isinstance(terminal_value, str) and terminal_value != ""
-    return terminal_value is not None
+        return isinstance(terminal_value, str) and terminal_value == completed_value
+    return (
+        type(terminal_value) is type(completed_value)
+        and terminal_value == completed_value
+    )
 
 
 def _value_is_empty(value: object) -> bool:

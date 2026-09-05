@@ -1,0 +1,5 @@
+data: {"type":"response.created","response":{"id":"resp_truncated_tool","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"echo hi\"}","status":"completed"}}
+
+data: {"type":"response.completed","response":{"id":"resp_truncated_tool","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"echo","status":"completed"}]}}
