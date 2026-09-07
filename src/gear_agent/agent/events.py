@@ -20,6 +20,36 @@ class ModelRequestStarted:
 
 
 @dataclass(frozen=True)
+class ModelTextDelta:
+    """Displayable assistant text received during a model request.
+
+    Attributes:
+        session_id: Session identifier.
+        iteration: Agent loop iteration number.
+        delta: Assistant text fragment in arrival order.
+    """
+
+    session_id: str
+    iteration: int
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelReasoningSummaryDelta:
+    """Provider-exposed reasoning summary received during a model request.
+
+    Attributes:
+        session_id: Session identifier.
+        iteration: Agent loop iteration number.
+        delta: Public reasoning summary fragment in arrival order.
+    """
+
+    session_id: str
+    iteration: int
+    delta: str
+
+
+@dataclass(frozen=True)
 class ReasoningReplayEvaluated:
     """Structured diagnostic for active opaque reasoning history.
 
@@ -80,6 +110,8 @@ class ToolUseFinished:
 
 AgentLoopEvent: TypeAlias = (
     ModelRequestStarted
+    | ModelTextDelta
+    | ModelReasoningSummaryDelta
     | ReasoningReplayEvaluated
     | ToolUseStarted
     | ToolUseFinished

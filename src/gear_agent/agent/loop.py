@@ -4,8 +4,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from gear_agent.agent.events import (
+    AgentLoopEvent,
     AgentLoopEventSink,
+    ModelReasoningSummaryDelta,
     ModelRequestStarted,
+    ModelTextDelta,
     ReasoningReplayEvaluated,
     ToolUseFinished,
     ToolUseStarted,
@@ -14,6 +17,15 @@ from gear_agent.agent.history import build_model_input
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
 from gear_agent.model.client import ModelClient
+from gear_agent.model.events import (
+    ModelFunctionCallArgumentsDelta,
+    ModelOutputItemCompleted,
+    ModelProgressEvent,
+    ModelProgressEventSink,
+    ModelReasoningSummaryDelta as ProviderReasoningSummaryDelta,
+    ModelReasoningTextDelta,
+    ModelTextDelta as ProviderTextDelta,
+)
 from gear_agent.model.responses import (
     extract_function_calls,
     extract_output_text,
@@ -132,13 +144,18 @@ class AgentLoop:
             self._event_sink.publish(
                 ModelRequestStarted(session_id=session_id, iteration=iteration)
             )
-            response = self._client.create_response(
+            response = self._client.create_response_with_progress(
                 self._config,
                 input_items,
                 tools,
                 AGENT_INSTRUCTIONS,
                 timeout_seconds,
                 stream_idle_timeout_seconds,
+                _AgentModelProgressSink(
+                    self._event_sink,
+                    session_id,
+                    iteration,
+                ),
             )
             self._store.append(
                 session_id,
@@ -314,3 +331,52 @@ def _recoverable_tool_error_result(error: GearError) -> dict[str, object]:
             "details": error.details,
         }
     }
+
+
+class _AgentModelProgressSink(ModelProgressEventSink):
+    """Adds agent request context to safe, displayable model progress."""
+
+    def __init__(
+        self,
+        event_sink: AgentLoopEventSink,
+        session_id: str,
+        iteration: int,
+    ) -> None:
+        self._event_sink = event_sink
+        self._session_id = session_id
+        self._iteration = iteration
+
+    def publish(self, event: ModelProgressEvent) -> None:
+        """Publishes only provider-neutral progress safe for presentation.
+
+        Args:
+            event: Model-layer progress event.
+
+        Raises:
+            ValueError: If a new model progress event type is not handled.
+        """
+
+        display_event: AgentLoopEvent
+        if isinstance(event, ProviderTextDelta):
+            display_event = ModelTextDelta(
+                session_id=self._session_id,
+                iteration=self._iteration,
+                delta=event.delta,
+            )
+            self._event_sink.publish(display_event)
+            return
+        if isinstance(event, ProviderReasoningSummaryDelta):
+            display_event = ModelReasoningSummaryDelta(
+                session_id=self._session_id,
+                iteration=self._iteration,
+                delta=event.delta,
+            )
+            self._event_sink.publish(display_event)
+            return
+        if isinstance(event, ModelReasoningTextDelta):
+            return
+        if isinstance(event, ModelFunctionCallArgumentsDelta):
+            return
+        if isinstance(event, ModelOutputItemCompleted):
+            return
+        raise ValueError(f"Unsupported model progress event: {type(event).__name__}")

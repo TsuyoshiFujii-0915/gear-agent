@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
-from rich.console import RenderableType
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding
 from rich.table import Table
@@ -16,7 +17,15 @@ from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Input, RichLog, Rule, Static
 
-from gear_agent.agent.events import AgentLoopEvent
+from gear_agent.agent.events import (
+    AgentLoopEvent,
+    ModelReasoningSummaryDelta,
+    ModelRequestStarted,
+    ModelTextDelta,
+    ReasoningReplayEvaluated,
+    ToolUseFinished,
+    ToolUseStarted,
+)
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.loop import AgentLoop
 from gear_agent.config import ModelConfig, RuntimeConfig
@@ -143,6 +152,18 @@ Rule {{
     scrollbar-background: {_BG};
 }}
 
+#model-progress {{
+    display: none;
+    height: auto;
+    max-height: 12;
+    padding: 0 5 1 5;
+    background: {_BG};
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+    scrollbar-color: {_LINE};
+    scrollbar-background: {_BG};
+}}
+
 #input-bar {{
     height: 1;
     margin: 1 0;
@@ -173,11 +194,20 @@ Input:focus {{
 
 
 class AgentProgress(Message):
-    """Textual message carrying an agent loop progress event."""
+    """Textual notification that queued agent progress is available."""
 
-    def __init__(self, event: AgentLoopEvent) -> None:
+    def __init__(self, sink: TextualAgentLoopEventSink) -> None:
         super().__init__()
-        self.event = event
+        self._sink = sink
+
+    def drain_events(self) -> tuple[AgentLoopEvent, ...]:
+        """Drains the progress events represented by this notification.
+
+        Returns:
+            Agent progress events in publication order.
+        """
+
+        return self._sink.drain_events()
 
 
 class GearApp(App[None]):
@@ -212,11 +242,16 @@ class GearApp(App[None]):
         self._model_config = model_config
         self._initial_events = store.load(session_id)
         self._token_usage: int | None = None
+        self._progress_sink: TextualAgentLoopEventSink | None = None
+        self._live_iteration: int | None = None
+        self._live_text_fragments: list[str] = []
+        self._live_reasoning_fragments: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Static(self._build_header(), id="header")
         yield Rule()
         yield RichLog(id="chat", markup=True, highlight=False, wrap=True, auto_scroll=True)
+        yield Static("", id="model-progress", markup=False)
         yield Rule()
         with Horizontal(id="input-bar"):
             yield Static("▌ ›", id="prompt")
@@ -282,6 +317,9 @@ class GearApp(App[None]):
         self.call_from_thread(self._apply_result, chat_lines, token_usage)
 
     def _apply_result(self, chat_lines: list[ChatLine], token_usage: int | None) -> None:
+        self._drain_progress_sink()
+        self._reset_live_progress(None)
+        self._refresh_live_progress()
         self._token_usage = token_usage
         self._render_history(chat_lines)
         self.query_one("#header", Static).update(self._build_header())
@@ -318,13 +356,115 @@ class GearApp(App[None]):
         chat.write("")
 
     def on_agent_progress(self, message: AgentProgress) -> None:
-        self._write_message(
-            self.query_one("#chat", RichLog),
-            ChatLine("tool", format_progress_event(message.event)),
-        )
+        self._apply_progress_events(message.drain_events())
 
     def _write_error(self, text: str) -> None:
+        self._drain_progress_sink()
+        self._reset_live_progress(None)
+        self._refresh_live_progress()
         self._write_message(self.query_one("#chat", RichLog), ChatLine("error", text))
+
+    def bind_progress_sink(self, sink: TextualAgentLoopEventSink) -> None:
+        """Registers the bound sink so finalization can drain queued events.
+
+        Args:
+            sink: Progress sink bound to this app.
+
+        Raises:
+            RuntimeError: If a different sink is already registered.
+        """
+
+        if self._progress_sink is not None and self._progress_sink is not sink:
+            raise RuntimeError("GearApp already has a different progress sink.")
+        self._progress_sink = sink
+
+    def _drain_progress_sink(self) -> None:
+        if self._progress_sink is None:
+            return
+        events = self._progress_sink.drain_events()
+        if len(events) > 0:
+            self._apply_progress_events(events)
+
+    def _apply_progress_events(self, events: tuple[AgentLoopEvent, ...]) -> None:
+        chat = self.query_one("#chat", RichLog)
+        for event in events:
+            if isinstance(event, ModelRequestStarted):
+                self._require_current_session(event.session_id)
+                self._reset_live_progress(event.iteration)
+                self._write_message(
+                    chat,
+                    ChatLine("tool", format_progress_event(event)),
+                )
+                continue
+            if isinstance(event, ModelTextDelta):
+                self._require_active_model_event(event.session_id, event.iteration)
+                self._live_text_fragments.append(event.delta)
+                continue
+            if isinstance(event, ModelReasoningSummaryDelta):
+                self._require_active_model_event(event.session_id, event.iteration)
+                self._live_reasoning_fragments.append(event.delta)
+                continue
+            if isinstance(event, ToolUseStarted):
+                self._require_current_session(event.session_id)
+                self._reset_live_progress(None)
+                self._write_message(
+                    chat,
+                    ChatLine("tool", format_progress_event(event)),
+                )
+                continue
+            if isinstance(event, (ToolUseFinished, ReasoningReplayEvaluated)):
+                self._require_current_session(event.session_id)
+                self._write_message(
+                    chat,
+                    ChatLine("tool", format_progress_event(event)),
+                )
+                continue
+            raise ValueError(f"Unsupported agent progress event: {type(event).__name__}")
+        self._refresh_live_progress()
+
+    def _require_current_session(self, session_id: str) -> None:
+        if session_id != self._session_id:
+            raise ValueError(
+                f"Progress event session {session_id} does not match {self._session_id}."
+            )
+
+    def _require_active_model_event(self, session_id: str, iteration: int) -> None:
+        self._require_current_session(session_id)
+        if self._live_iteration != iteration:
+            raise ValueError(
+                f"Model progress iteration {iteration} has no matching active request."
+            )
+
+    def _reset_live_progress(self, iteration: int | None) -> None:
+        self._live_iteration = iteration
+        self._live_text_fragments.clear()
+        self._live_reasoning_fragments.clear()
+
+    def _refresh_live_progress(self) -> None:
+        progress = self.query_one("#model-progress", Static)
+        renderables: list[RenderableType] = []
+        if len(self._live_reasoning_fragments) > 0:
+            renderables.extend(
+                [
+                    Text("gear thinking", style=f"bold {_STEEL}"),
+                    Padding(
+                        Text("".join(self._live_reasoning_fragments), style=_MUTED),
+                        (0, 0, 1, 2),
+                    ),
+                ]
+            )
+        if len(self._live_text_fragments) > 0:
+            renderables.extend(
+                [
+                    Text("gear", style=f"bold {_BRASS}"),
+                    Padding(
+                        Text("".join(self._live_text_fragments), style=_TEXT),
+                        (0, 0, 0, 2),
+                    ),
+                ]
+            )
+        progress.display = len(renderables) > 0
+        progress.update(Group(*renderables) if len(renderables) > 0 else "")
 
     def _set_busy(self, busy: bool) -> None:
         if busy:
@@ -358,6 +498,9 @@ class TextualAgentLoopEventSink:
 
     def __init__(self) -> None:
         self._app: GearApp | None = None
+        self._events: list[AgentLoopEvent] = []
+        self._notification_pending = False
+        self._lock = Lock()
 
     def bind(self, app: GearApp) -> None:
         """Binds the sink to a running app.
@@ -366,7 +509,10 @@ class TextualAgentLoopEventSink:
             app: Gear Agent Textual app.
         """
 
+        if self._app is not None and self._app is not app:
+            raise RuntimeError("TextualAgentLoopEventSink is already bound to another app.")
         self._app = app
+        app.bind_progress_sink(self)
 
     def publish(self, event: AgentLoopEvent) -> None:
         """Publishes an agent loop progress event to the app.
@@ -380,4 +526,26 @@ class TextualAgentLoopEventSink:
 
         if self._app is None:
             raise RuntimeError("TextualAgentLoopEventSink must be bound before use.")
-        self._app.post_message(AgentProgress(event))
+        should_notify = False
+        with self._lock:
+            self._events.append(event)
+            if not self._notification_pending:
+                self._notification_pending = True
+                should_notify = True
+        if should_notify and not self._app.post_message(AgentProgress(self)):
+            with self._lock:
+                self._notification_pending = False
+            raise RuntimeError("Textual app rejected an agent progress notification.")
+
+    def drain_events(self) -> tuple[AgentLoopEvent, ...]:
+        """Returns and clears the currently queued progress batch.
+
+        Returns:
+            Queued events in publication order.
+        """
+
+        with self._lock:
+            events = tuple(self._events)
+            self._events.clear()
+            self._notification_pending = False
+        return events

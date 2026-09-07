@@ -23,8 +23,9 @@ class ModelClient:
     ) -> None:
         """Initializes a model client.
 
-        The progress sink is optional because non-stream callers and the current
-        TUI deliberately do not consume live model deltas.
+        The configured sink preserves the standalone client API for callers
+        that consume model progress directly. AgentLoop supplies a contextual
+        per-request sink instead.
 
         Args:
             transport: HTTP transport used for model requests.
@@ -61,6 +62,62 @@ class ModelClient:
             Parsed response object.
         """
 
+        return self._create_response(
+            config,
+            input_value,
+            tools,
+            instructions,
+            timeout_seconds,
+            stream_idle_timeout_seconds,
+            self._progress_sink,
+        )
+
+    def create_response_with_progress(
+        self,
+        config: ModelConfig,
+        input_value: object,
+        tools: list[dict[str, object]],
+        instructions: str,
+        timeout_seconds: float,
+        stream_idle_timeout_seconds: float | None,
+        progress_sink: ModelProgressEventSink,
+    ) -> dict[str, Any]:
+        """Creates one response with an explicit per-request progress sink.
+
+        Args:
+            config: Model endpoint configuration.
+            input_value: Responses API input value.
+            tools: Function tool definitions.
+            instructions: System-level instructions for the response.
+            timeout_seconds: Request timeout in seconds.
+            stream_idle_timeout_seconds: Stream read idle timeout, required in
+                streaming mode and unused in non-stream mode.
+            progress_sink: Consumer for this request's provider-neutral progress.
+
+        Returns:
+            Parsed response object.
+        """
+
+        return self._create_response(
+            config,
+            input_value,
+            tools,
+            instructions,
+            timeout_seconds,
+            stream_idle_timeout_seconds,
+            progress_sink,
+        )
+
+    def _create_response(
+        self,
+        config: ModelConfig,
+        input_value: object,
+        tools: list[dict[str, object]],
+        instructions: str,
+        timeout_seconds: float,
+        stream_idle_timeout_seconds: float | None,
+        progress_sink: ModelProgressEventSink,
+    ) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if config.api_key is not None:
             headers["Authorization"] = f"Bearer {config.api_key}"
@@ -93,7 +150,7 @@ class ModelClient:
                 {"url": config.url},
             )
 
-        assembler = ResponsesStreamAssembler(self._progress_sink)
+        assembler = ResponsesStreamAssembler(progress_sink)
         for sse_event in self._transport.post_sse(
             config.url,
             headers,
