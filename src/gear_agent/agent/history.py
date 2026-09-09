@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 import json
 
 from gear_agent.errors import gear_error
+from gear_agent.model.types import ModelHistory
 from gear_agent.model.responses import function_call_output_item
 from gear_agent.model.replay import (
     ReasoningReplayDiagnostic,
@@ -19,19 +19,6 @@ FUNCTION_CALL_OUTPUT_HISTORY_MAX_CHARS = 12000
 COMPACTION_SUMMARY_PREFIX = (
     "Earlier session context (compressed continuation, not a new user request):"
 )
-
-
-@dataclass(frozen=True)
-class ModelHistory:
-    """Model-visible input and opaque reasoning replay diagnostics.
-
-    Attributes:
-        items: Responses-compatible input items.
-        diagnostic: Counts describing opaque state reuse and removal.
-    """
-
-    items: list[object]
-    diagnostic: ReasoningReplayDiagnostic
 
 
 def build_model_input(

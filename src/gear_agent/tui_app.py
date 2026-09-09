@@ -266,7 +266,6 @@ class GearApp(App[None]):
             self._compaction.compact(
                 self._session_id,
                 self._store,
-                self._model_config,
                 self._runtime.model_timeout_seconds,
                 self._runtime.model_stream_idle_timeout_seconds,
             )

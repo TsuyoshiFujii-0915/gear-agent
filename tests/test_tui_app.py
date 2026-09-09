@@ -12,6 +12,7 @@ from gear_agent.agent.events import SilentAgentLoopEventSink
 from gear_agent.agent.loop import AgentLoop
 from gear_agent.config import ModelConfig, ReasoningReplayMode, RuntimeConfig
 from gear_agent.model.client import ModelClient
+from gear_agent.model.responses_adapter import ResponsesModelAdapter
 from gear_agent.model.transport import HttpTransport
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.tui_app import GearApp
@@ -127,13 +128,12 @@ class GearAppTests(unittest.IsolatedAsyncioTestCase):
                 session_id=session_id,
                 workspace=workspace,
                 agent_loop=AgentLoop(
-                    client,
-                    model_config,
+                    ResponsesModelAdapter(client, model_config),
                     [],
                     store,
                     SilentAgentLoopEventSink(),
                 ),
-                compaction=CompactionService(client),
+                compaction=CompactionService(ResponsesModelAdapter(client, model_config)),
                 store=store,
                 runtime=runtime,
                 model_config=model_config,
@@ -196,13 +196,12 @@ class GearAppTests(unittest.IsolatedAsyncioTestCase):
                 session_id="session-1",
                 workspace=workspace,
                 agent_loop=AgentLoop(
-                    client,
-                    model_config,
+                    ResponsesModelAdapter(client, model_config),
                     [],
                     store,
                     SilentAgentLoopEventSink(),
                 ),
-                compaction=CompactionService(client),
+                compaction=CompactionService(ResponsesModelAdapter(client, model_config)),
                 store=store,
                 runtime=runtime,
                 model_config=model_config,

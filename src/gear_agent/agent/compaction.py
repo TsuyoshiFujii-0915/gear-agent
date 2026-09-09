@@ -4,10 +4,8 @@ from typing import Any
 import json
 
 from gear_agent.agent.history import select_effective_events
-from gear_agent.config import ModelConfig
 from gear_agent.errors import gear_error
-from gear_agent.model.client import ModelClient
-from gear_agent.model.responses import extract_output_text
+from gear_agent.model.adapter import ModelAdapter
 from gear_agent.model.replay import strip_opaque_reasoning_from_event
 from gear_agent.store.base import ContextStore
 
@@ -18,14 +16,13 @@ COMPACTION_INSTRUCTIONS = "Summarize effective Gear Agent session context for fu
 class CompactionService:
     """Creates explicit summaries for stored session history."""
 
-    def __init__(self, client: ModelClient) -> None:
-        self._client = client
+    def __init__(self, adapter: ModelAdapter) -> None:
+        self._adapter = adapter
 
     def compact(
         self,
         session_id: str,
         store: ContextStore,
-        config: ModelConfig,
         timeout_seconds: int,
         stream_idle_timeout_seconds: int | None = None,
     ) -> str:
@@ -34,7 +31,6 @@ class CompactionService:
         Args:
             session_id: Session identifier.
             store: Context store.
-            config: Model endpoint configuration.
             timeout_seconds: Request timeout in seconds.
             stream_idle_timeout_seconds: Maximum idle time between stream bytes.
 
@@ -46,15 +42,14 @@ class CompactionService:
         effective_events = select_effective_events(events)
         sanitized_events = _strip_model_response_opaque_reasoning(effective_events)
         prompt = _build_compaction_prompt(sanitized_events)
-        response = self._client.create_response(
-            config,
+        response = self._adapter.create_response(
             prompt,
             [],
             COMPACTION_INSTRUCTIONS,
             timeout_seconds,
             stream_idle_timeout_seconds,
         )
-        summary = extract_output_text(response)
+        summary = response.text
         if summary.strip() == "":
             raise gear_error(
                 "compaction_summary_missing",
