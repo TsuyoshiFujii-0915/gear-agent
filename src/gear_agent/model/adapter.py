@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from gear_agent.model.events import ModelProgressEventSink
 from gear_agent.model.replay import ReasoningReplayPolicy, ReplayedOutput
 from gear_agent.model.types import FunctionCall, ModelHistory
 
@@ -69,6 +70,7 @@ class ModelAdapter(Protocol):
         self, input_value: object, tools: list[dict[str, object]],
         instructions: str, timeout_seconds: float,
         stream_idle_timeout_seconds: float | None,
+        progress_sink: ModelProgressEventSink,
     ) -> ModelResponse:
         """Executes one response, propagating model errors explicitly."""
         ...

@@ -12,7 +12,7 @@ from gear_agent.model.client import ModelClient
 from gear_agent.model.factory import build_model_adapter
 from gear_agent.model.responses_adapter import ResponsesModelAdapter
 from tests.test_responses_stream import FixtureTransport, RecordingModelProgressSink, streaming_config
-from gear_agent.model.events import ModelTextDelta
+from gear_agent.model.events import ModelTextDelta, SilentModelProgressEventSink
 
 
 @pytest.mark.parametrize('stream', [False, True])
@@ -22,7 +22,7 @@ def test_adapter_preserves_canonical_response_and_progress(stream: bool) -> None
     transport = FixtureTransport('text.sse', terminal)
     sink = RecordingModelProgressSink()
     adapter: ModelAdapter = ResponsesModelAdapter(ModelClient(transport, sink), config)
-    response = adapter.create_response('hello', [], 'Follow instructions.', 30, 5)
+    response = adapter.create_response('hello', [], 'Follow instructions.', 30, 5, sink)
     assert response.persisted_payload == terminal
     assert response.text == 'こんにちは'
     assert response.function_calls == []
@@ -35,7 +35,9 @@ def test_adapter_propagates_stream_failures_without_retry(fixture: str) -> None:
     transport = FixtureTransport(fixture, {})
     adapter = ResponsesModelAdapter(ModelClient(transport), streaming_config())
     with pytest.raises(GearError):
-        adapter.create_response('hello', [], '', 30, 5)
+        adapter.create_response(
+            'hello', [], '', 30, 5, SilentModelProgressEventSink(),
+        )
     assert transport.stream_calls == 1
     assert transport.json_calls == 0
 
@@ -59,7 +61,9 @@ def test_legacy_configuration_builds_serializable_capabilities() -> None:
 def test_invalid_output_fails_in_model_layer(output: Any) -> None:
     transport = FixtureTransport('text.sse', {'output': output})
     adapter = ResponsesModelAdapter(ModelClient(transport), replace(streaming_config(), stream=False))
-    response = adapter.create_response('hello', [], '', 30, None)
+    response = adapter.create_response(
+        'hello', [], '', 30, None, SilentModelProgressEventSink(),
+    )
     with pytest.raises(GearError) as error:
         _ = response.replayed_output
     assert error.value.error_type == 'response_shape_invalid'
@@ -118,7 +122,7 @@ def test_legacy_file_constructs_adapter(tmp_path: 'Path') -> None:
     assert config.model.stream is False
 
 
-def test_streaming_compaction_preserves_summary_and_progress() -> None:
+def test_streaming_compaction_is_silent_and_preserves_summary() -> None:
     from gear_agent.agent.compaction import CompactionService
     from gear_agent.store.memory import MemoryContextStore
 
@@ -129,4 +133,4 @@ def test_streaming_compaction_preserves_summary_and_progress() -> None:
     store.append('session', 'user_input', {'text': 'hello'})
     assert CompactionService(adapter).compact('session', store, 30, 5) == 'こんにちは'
     assert store.load('session')[-1]['payload'] == {'text': 'こんにちは'}
-    assert [e.delta for e in sink.events if isinstance(e, ModelTextDelta)] == ['こんにちは']
+    assert [e.delta for e in sink.events if isinstance(e, ModelTextDelta)] == []

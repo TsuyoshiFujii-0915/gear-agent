@@ -6,6 +6,7 @@ import json
 from gear_agent.agent.history import select_effective_events
 from gear_agent.errors import gear_error
 from gear_agent.model.adapter import ModelAdapter
+from gear_agent.model.events import SilentModelProgressEventSink
 from gear_agent.model.replay import strip_opaque_reasoning_from_event
 from gear_agent.store.base import ContextStore
 
@@ -48,6 +49,7 @@ class CompactionService:
             COMPACTION_INSTRUCTIONS,
             timeout_seconds,
             stream_idle_timeout_seconds,
+            SilentModelProgressEventSink(),
         )
         summary = response.text
         if summary.strip() == "":

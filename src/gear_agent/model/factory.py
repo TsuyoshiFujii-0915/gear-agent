@@ -12,6 +12,6 @@ def build_model_adapter(config: ModelConfig) -> ModelAdapter:
         config: Validated effective model configuration.
 
     Returns:
-        Configured Responses adapter with the existing silent progress behavior.
+        Configured Responses adapter whose callers supply per-request progress.
     """
     return ResponsesModelAdapter(ModelClient(HttpxHttpTransport()), config)

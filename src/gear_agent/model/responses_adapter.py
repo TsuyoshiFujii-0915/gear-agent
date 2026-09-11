@@ -9,6 +9,7 @@ from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import gear_error
 from gear_agent.model.adapter import ModelCapabilities
 from gear_agent.model.client import ModelClient
+from gear_agent.model.events import ModelProgressEventSink
 from gear_agent.model.replay import (
     ReasoningReplayPolicy, ReplayedOutput, model_response_event_payload,
     reasoning_replay_policy, replay_output_items,
@@ -111,6 +112,7 @@ class ResponsesModelAdapter:
         self, input_value: object, tools: list[dict[str, object]],
         instructions: str, timeout_seconds: float,
         stream_idle_timeout_seconds: float | None,
+        progress_sink: ModelProgressEventSink,
     ) -> ResponsesModelResponse:
         """Creates a canonical response through the unchanged client.
 
@@ -120,13 +122,15 @@ class ResponsesModelAdapter:
             instructions: Model instructions.
             timeout_seconds: Request timeout.
             stream_idle_timeout_seconds: Required for streaming; otherwise unused.
+            progress_sink: Consumer for this request's provider-neutral progress.
 
         Returns:
             Completed response with semantic accessors.
         """
-        response = self._client.create_response(
+        response = self._client.create_response_with_progress(
             self._config, input_value, tools, instructions,
             timeout_seconds, stream_idle_timeout_seconds,
+            progress_sink,
         )
         return ResponsesModelResponse(response, self.replay_policy)
 
