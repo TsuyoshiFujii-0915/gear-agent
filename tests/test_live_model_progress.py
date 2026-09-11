@@ -24,6 +24,7 @@ from gear_agent.agent.events import (
 from gear_agent.agent.loop import AgentLoop
 from gear_agent.config import ModelConfig, ReasoningReplayMode, RuntimeConfig
 from gear_agent.model.client import ModelClient
+from gear_agent.model.responses_adapter import ResponsesModelAdapter
 from gear_agent.model.transport import HttpTransport, SseEvent
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.store.memory import MemoryContextStore
@@ -216,18 +217,18 @@ def _create_app(
     store = JsonlContextStore(workspace / "sessions")
     model_config = _streaming_model_config()
     progress_sink = TextualAgentLoopEventSink()
+    adapter = ResponsesModelAdapter(ModelClient(transport), model_config)
     app = GearApp(
         model=model_config.model,
         session_id="session-1",
         workspace=workspace,
         agent_loop=AgentLoop(
-            ModelClient(transport),
-            model_config,
+            adapter,
             [],
             store,
             progress_sink,
         ),
-        compaction=CompactionService(ModelClient(transport)),
+        compaction=CompactionService(adapter),
         store=store,
         runtime=RuntimeConfig(
             workdir=workspace,
@@ -298,8 +299,7 @@ class AgentModelProgressTests(unittest.TestCase):
         store = MemoryContextStore()
 
         AgentLoop(
-            ModelClient(transport),
-            _streaming_model_config(),
+            ResponsesModelAdapter(ModelClient(transport), _streaming_model_config()),
             [],
             store,
             sink,

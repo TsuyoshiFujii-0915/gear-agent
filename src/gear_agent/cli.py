@@ -17,8 +17,7 @@ from gear_agent.config import (
     load_config,
 )
 from gear_agent.errors import GearError
-from gear_agent.model.client import ModelClient
-from gear_agent.model.transport import HttpxHttpTransport
+from gear_agent.model.factory import build_model_adapter
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.store.sessions import JsonlSessionDiscovery
 from gear_agent.tools.configured import build_configured_tools
@@ -121,14 +120,14 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
         shell_runtime,
     )
     event_sink = TextualAgentLoopEventSink()
+    adapter = build_model_adapter(config.model)
     loop = AgentLoop(
-        ModelClient(HttpxHttpTransport()),
-        config.model,
+        adapter,
         tools,
         store,
         event_sink,
     )
-    compaction = CompactionService(ModelClient(HttpxHttpTransport()))
+    compaction = CompactionService(adapter)
     app = GearApp(
         model=config.model.model,
         session_id=session_id,

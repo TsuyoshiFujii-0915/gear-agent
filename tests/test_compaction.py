@@ -5,6 +5,7 @@ from gear_agent.agent.compaction import CompactionService
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError
 from gear_agent.model.client import ModelClient
+from gear_agent.model.responses_adapter import ResponsesModelAdapter
 from gear_agent.model.transport import HttpTransport
 from gear_agent.store.memory import MemoryContextStore
 
@@ -27,6 +28,12 @@ class CompactionTransport(HttpTransport):
 
 class CompactionTests(unittest.TestCase):
     def test_compaction_prompt_omits_opaque_reasoning_state(self) -> None:
+        config = ModelConfig(
+            url="https://api.openai.com/v1/responses",
+            model="gpt-5.5",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.ENCRYPTED,
+        )
         transport = CompactionTransport(
             [
                 {
@@ -62,17 +69,10 @@ class CompactionTests(unittest.TestCase):
         }
         store = MemoryContextStore()
         store.append("session-1", "model_response", stored_payload)
-        config = ModelConfig(
-            url="https://api.openai.com/v1/responses",
-            model="gpt-5.5",
-            api_key=None,
-            reasoning_replay=ReasoningReplayMode.ENCRYPTED,
-        )
 
-        CompactionService(ModelClient(transport)).compact(
+        CompactionService(ResponsesModelAdapter(ModelClient(transport), config)).compact(
             "session-1",
             store,
-            config,
             30,
         )
 
@@ -86,6 +86,12 @@ class CompactionTests(unittest.TestCase):
         )
 
     def test_compacts_existing_events_into_summary_event(self) -> None:
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
+        )
         transport = CompactionTransport(
             [
                 {
@@ -100,15 +106,9 @@ class CompactionTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         store.append("session-1", "user_input", {"text": "hello"})
-        service = CompactionService(ModelClient(transport))
-        config = ModelConfig(
-            url="http://localhost:1234/v1/responses",
-            model="local-model-id",
-            api_key=None,
-            reasoning_replay=ReasoningReplayMode.NONE,
-        )
+        service = CompactionService(ResponsesModelAdapter(ModelClient(transport), config))
 
-        summary = service.compact("session-1", store, config, 30)
+        summary = service.compact("session-1", store, 30)
 
         self.assertEqual(summary, "summary")
         self.assertEqual(store.events[-1]["kind"], "compaction_summary")
@@ -117,6 +117,12 @@ class CompactionTests(unittest.TestCase):
     def test_repeated_compaction_uses_effective_context_and_preserves_raw_events(
         self,
     ) -> None:
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
+        )
         transport = CompactionTransport(
             [
                 {
@@ -139,17 +145,11 @@ class CompactionTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         store.append("session-1", "user_input", {"text": "pre-checkpoint-secret"})
-        service = CompactionService(ModelClient(transport))
-        config = ModelConfig(
-            url="http://localhost:1234/v1/responses",
-            model="local-model-id",
-            api_key=None,
-            reasoning_replay=ReasoningReplayMode.NONE,
-        )
+        service = CompactionService(ResponsesModelAdapter(ModelClient(transport), config))
 
-        first_summary = service.compact("session-1", store, config, 30)
+        first_summary = service.compact("session-1", store, 30)
         store.append("session-1", "user_input", {"text": "post-checkpoint-work"})
-        second_summary = service.compact("session-1", store, config, 30)
+        second_summary = service.compact("session-1", store, 30)
 
         self.assertEqual(first_summary, "summary-one")
         self.assertEqual(second_summary, "summary-two")
@@ -172,23 +172,29 @@ class CompactionTests(unittest.TestCase):
         )
 
     def test_compaction_failure_does_not_delete_existing_events(self) -> None:
-        transport = CompactionTransport([{"output": "bad"}])
-        store = MemoryContextStore()
-        store.append("session-1", "user_input", {"text": "hello"})
-        service = CompactionService(ModelClient(transport))
         config = ModelConfig(
             url="http://localhost:1234/v1/responses",
             model="local-model-id",
             api_key=None,
             reasoning_replay=ReasoningReplayMode.NONE,
         )
+        transport = CompactionTransport([{"output": "bad"}])
+        store = MemoryContextStore()
+        store.append("session-1", "user_input", {"text": "hello"})
+        service = CompactionService(ResponsesModelAdapter(ModelClient(transport), config))
 
         with self.assertRaises(GearError):
-            service.compact("session-1", store, config, 30)
+            service.compact("session-1", store, 30)
 
         self.assertEqual(len(store.events), 1)
 
     def test_empty_compaction_summary_fails_without_creating_checkpoint(self) -> None:
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
+        )
         transport = CompactionTransport(
             [
                 {
@@ -203,16 +209,10 @@ class CompactionTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         store.append("session-1", "user_input", {"text": "keep this context"})
-        service = CompactionService(ModelClient(transport))
-        config = ModelConfig(
-            url="http://localhost:1234/v1/responses",
-            model="local-model-id",
-            api_key=None,
-            reasoning_replay=ReasoningReplayMode.NONE,
-        )
+        service = CompactionService(ResponsesModelAdapter(ModelClient(transport), config))
 
         with self.assertRaises(GearError) as raised:
-            service.compact("session-1", store, config, 30)
+            service.compact("session-1", store, 30)
 
         self.assertIn("Compaction response did not contain a summary", str(raised.exception))
         self.assertEqual(
@@ -221,6 +221,12 @@ class CompactionTests(unittest.TestCase):
         )
 
     def test_compaction_includes_only_post_checkpoint_turn_errors(self) -> None:
+        config = ModelConfig(
+            url="http://localhost:1234/v1/responses",
+            model="local-model-id",
+            api_key=None,
+            reasoning_replay=ReasoningReplayMode.NONE,
+        )
         transport = CompactionTransport(
             [
                 {
@@ -237,15 +243,9 @@ class CompactionTests(unittest.TestCase):
         store.append("session-1", "turn_error", {"message": "obsolete error"})
         store.append("session-1", "compaction_summary", {"text": "summary-one"})
         store.append("session-1", "turn_error", {"message": "current error"})
-        service = CompactionService(ModelClient(transport))
-        config = ModelConfig(
-            url="http://localhost:1234/v1/responses",
-            model="local-model-id",
-            api_key=None,
-            reasoning_replay=ReasoningReplayMode.NONE,
-        )
+        service = CompactionService(ResponsesModelAdapter(ModelClient(transport), config))
 
-        service.compact("session-1", store, config, 30)
+        service.compact("session-1", store, 30)
 
         self.assertNotIn("obsolete error", transport.payloads[0]["input"])
         self.assertIn("summary-one", transport.payloads[0]["input"])

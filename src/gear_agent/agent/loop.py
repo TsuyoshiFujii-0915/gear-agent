@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from gear_agent.agent.events import (
     AgentLoopEvent,
@@ -13,10 +12,8 @@ from gear_agent.agent.events import (
     ToolUseFinished,
     ToolUseStarted,
 )
-from gear_agent.agent.history import build_model_input
-from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
-from gear_agent.model.client import ModelClient
+from gear_agent.model.adapter import ModelAdapter
 from gear_agent.model.events import (
     ModelFunctionCallArgumentsDelta,
     ModelOutputItemCompleted,
@@ -26,19 +23,7 @@ from gear_agent.model.events import (
     ModelReasoningTextDelta,
     ModelTextDelta as ProviderTextDelta,
 )
-from gear_agent.model.responses import (
-    extract_function_calls,
-    extract_output_text,
-    function_call_output_item,
-)
-from gear_agent.model.replay import (
-    ReasoningReplayDiagnostic,
-    ReasoningReplayPolicy,
-    ReplayedOutput,
-    model_response_event_payload,
-    reasoning_replay_policy,
-    replay_output_items,
-)
+from gear_agent.model.replay import ReasoningReplayDiagnostic
 from gear_agent.store.base import ContextStore
 from gear_agent.tools.base import Tool
 from gear_agent.tools.registry import ToolRegistry
@@ -80,15 +65,13 @@ class AgentLoop:
 
     def __init__(
         self,
-        client: ModelClient,
-        config: ModelConfig,
+        adapter: ModelAdapter,
         tools: list[Tool],
         store: ContextStore,
         event_sink: AgentLoopEventSink,
     ) -> None:
-        self._client = client
-        self._config = config
-        self._replay_policy = reasoning_replay_policy(config)
+        self._adapter = adapter
+        self._replay_policy = adapter.replay_policy
         self._registry = ToolRegistry(tools)
         self._store = store
         self._event_sink = event_sink
@@ -122,10 +105,9 @@ class AgentLoop:
                 True,
                 {"max_iterations": max_iterations},
             )
-        model_input = build_model_input(
+        model_input = self._adapter.prepare_history(
             self._store.load(session_id),
             user_text,
-            self._replay_policy,
         )
         input_items = model_input.items
         self._publish_replay_diagnostic(session_id, model_input.diagnostic)
@@ -144,8 +126,7 @@ class AgentLoop:
             self._event_sink.publish(
                 ModelRequestStarted(session_id=session_id, iteration=iteration)
             )
-            response = self._client.create_response_with_progress(
-                self._config,
+            response = self._adapter.create_response(
                 input_items,
                 tools,
                 AGENT_INSTRUCTIONS,
@@ -160,16 +141,13 @@ class AgentLoop:
             self._store.append(
                 session_id,
                 "model_response",
-                model_response_event_payload(response, self._replay_policy),
+                response.persisted_payload,
             )
-            replayed_output = _current_response_output(
-                response,
-                self._replay_policy,
-            )
+            replayed_output = response.replayed_output
             output_items = replayed_output.items
-            function_calls = extract_function_calls(response)
+            function_calls = response.function_calls
             if len(function_calls) == 0:
-                final_text = extract_output_text(response)
+                final_text = response.text
                 if _has_final_text(final_text):
                     self._store.append(session_id, "assistant_message", {"text": final_text})
                     return TurnResult(final_text=final_text, iterations=iteration)
@@ -177,10 +155,7 @@ class AgentLoop:
                     finalization_retry_used = True
                     input_items.extend(output_items)
                     input_items.append(
-                        {
-                            "role": "user",
-                            "content": FINALIZATION_RETRY_INSTRUCTION,
-                        }
+                        self._adapter.user_message_item(FINALIZATION_RETRY_INSTRUCTION)
                     )
                     pending_replay_diagnostic = _nonempty_replay_diagnostic(
                         replayed_output.diagnostic
@@ -243,7 +218,7 @@ class AgentLoop:
                         result=tool_result,
                     )
                 )
-                input_items.append(function_call_output_item(function_call.call_id, tool_result))
+                input_items.append(self._adapter.tool_result_item(function_call.call_id, tool_result))
 
         raise gear_error(
             "iteration_limit_reached",
@@ -272,17 +247,6 @@ class AgentLoop:
         )
 
 
-def _current_response_output(
-    response: dict[str, Any],
-    replay_policy: ReasoningReplayPolicy,
-) -> ReplayedOutput:
-    output_items = _output_items(response)
-    source_scope = None
-    if replay_policy.mode is ReasoningReplayMode.ENCRYPTED:
-        source_scope = replay_policy.current_scope
-    return replay_output_items(output_items, source_scope, replay_policy)
-
-
 def _nonempty_replay_diagnostic(
     diagnostic: ReasoningReplayDiagnostic,
 ) -> ReasoningReplayDiagnostic | None:
@@ -292,30 +256,6 @@ def _nonempty_replay_diagnostic(
     if handled_items == 0:
         return None
     return diagnostic
-
-
-def _output_items(response: dict[str, Any]) -> list[dict[str, Any]]:
-    output = response.get("output")
-    if not isinstance(output, list):
-        raise gear_error(
-            "response_shape_invalid",
-            "Response output is not a list.",
-            "agent_loop",
-            True,
-            {},
-        )
-    items: list[dict[str, Any]] = []
-    for item in output:
-        if not isinstance(item, dict):
-            raise gear_error(
-                "response_shape_invalid",
-                "Response output item is not an object.",
-                "agent_loop",
-                True,
-                {},
-            )
-        items.append(item)
-    return items
 
 
 def _has_final_text(text: str) -> bool:

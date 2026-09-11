@@ -14,6 +14,7 @@ from gear_agent.agent.loop import AgentLoop
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
 from gear_agent.model.client import ModelClient
+from gear_agent.model.responses_adapter import ResponsesModelAdapter
 from gear_agent.model.transport import HttpTransport
 from gear_agent.store.memory import MemoryContextStore
 from gear_agent.tools.base import Tool
@@ -174,7 +175,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(client, config, [EchoTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [EchoTool()], store, event_sink)
 
         result = loop.run_turn("session-1", "hello", 4, 30)
 
@@ -252,7 +253,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
-        loop = AgentLoop(client, config, [EchoTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [EchoTool()], store, event_sink)
 
         loop.run_turn("session-1", "hello", 4, 30)
         result = loop.run_turn("session-1", "continue", 4, 30)
@@ -311,8 +312,7 @@ class AgentLoopTests(unittest.TestCase):
         store.append("session-1", "user_input", {"text": "work after summary"})
         store.append("session-1", "assistant_message", {"text": "post-summary answer"})
         loop = AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             SilentAgentLoopEventSink(),
@@ -360,8 +360,7 @@ class AgentLoopTests(unittest.TestCase):
         store.append("session-1", "user_input", {"text": "old request"})
         store.append("session-1", "compaction_summary", {"text": "saved summary"})
         loop = AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             SilentAgentLoopEventSink(),
@@ -429,8 +428,7 @@ class AgentLoopTests(unittest.TestCase):
             },
         )
         loop = AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             SilentAgentLoopEventSink(),
@@ -473,8 +471,7 @@ class AgentLoopTests(unittest.TestCase):
             },
         )
         loop = AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             SilentAgentLoopEventSink(),
@@ -501,8 +498,7 @@ class AgentLoopTests(unittest.TestCase):
         store.append("session-1", "user_input", {"text": "preserved request"})
         store.append("session-1", "compaction_summary", {"text": "   "})
         loop = AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             SilentAgentLoopEventSink(),
@@ -554,7 +550,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
-        loop = AgentLoop(client, config, [LargeOutputTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [LargeOutputTool()], store, event_sink)
 
         loop.run_turn("session-1", "produce large output", 4, 30)
         loop.run_turn("session-1", "continue", 4, 30)
@@ -598,7 +594,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(client, config, [RecoverableFailingTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [RecoverableFailingTool()], store, event_sink)
 
         result = loop.run_turn("session-1", "hello", 4, 30)
 
@@ -676,16 +672,14 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             SilentAgentLoopEventSink(),
         ).run_turn("session-1", "start", 4, 30)
         resumed_events = RecordingEventSink()
         result = AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [],
             store,
             resumed_events,
@@ -771,8 +765,7 @@ class AgentLoopTests(unittest.TestCase):
         event_sink = RecordingEventSink()
 
         AgentLoop(
-            ModelClient(transport),
-            current_config,
+            ResponsesModelAdapter(ModelClient(transport), current_config),
             [],
             store,
             event_sink,
@@ -837,8 +830,7 @@ class AgentLoopTests(unittest.TestCase):
         )
 
         AgentLoop(
-            ModelClient(transport),
-            config,
+            ResponsesModelAdapter(ModelClient(transport), config),
             [EchoTool()],
             MemoryContextStore(),
             SilentAgentLoopEventSink(),
@@ -871,7 +863,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
-        loop = AgentLoop(client, config, [UnrecoverableFailingTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [UnrecoverableFailingTool()], store, event_sink)
 
         with self.assertRaises(GearError):
             loop.run_turn("session-1", "hello", 4, 30)
@@ -915,7 +907,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(client, config, [], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [], store, event_sink)
 
         result = loop.run_turn("session-1", "hello", 4, 30)
 
@@ -966,7 +958,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(client, config, [], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [], store, event_sink)
 
         with self.assertRaises(GearError) as error:
             loop.run_turn("session-1", "hello", 4, 30)

@@ -1,25 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 import json
 
 from gear_agent.errors import gear_error
-
-
-@dataclass(frozen=True)
-class FunctionCall:
-    """Function call emitted by the Responses API.
-
-    Attributes:
-        call_id: Tool call identifier used for function_call_output.
-        name: Tool name.
-        arguments: Parsed JSON arguments.
-    """
-
-    call_id: str
-    name: str
-    arguments: dict[str, object]
+from gear_agent.model.types import FunctionCall
 
 
 def extract_output_text(response: dict[str, Any]) -> str:
