@@ -64,11 +64,16 @@ class RepositoryContext:
         Raises:
             GearError: If a path escapes, a file is invalid, or a size limit is exceeded.
         """
+        return self._discover_physical(
+            tuple(self._resolve_path(str(directory)) for directory in directories)
+        )
+
+    def _discover_physical(self, directories: tuple[Path, ...]) -> tuple[RepositoryInstruction, ...]:
         scopes = {Path('.')}
         for directory in directories:
-            resolved = self._resolve_path(str(directory))
-            scopes.add(resolved)
-            scopes.update(resolved.parents)
+            physical = _relative_scope_path(str(directory))
+            scopes.add(physical)
+            scopes.update(physical.parents)
         records: list[RepositoryInstruction] = []
         total_bytes = 0
         for scope in sorted(scopes, key=lambda path: (len(path.parts), path.as_posix())):
@@ -100,7 +105,7 @@ class RepositoryContext:
         Raises:
             GearError: If applicable context cannot be constructed safely.
         """
-        records = self.discover(self._activity_directories(events))
+        records = self._discover_physical(self._activity_directories(events))
         if not records:
             return base
         blocks = [
@@ -117,12 +122,7 @@ class RepositoryContext:
         return '\n\n'.join(blocks)
 
     def _resolve_path(self, raw_path: str) -> Path:
-        path = Path(raw_path)
-        if path.is_absolute() or '..' in path.parts:
-            raise _error(
-                'repository_path_outside_workspace', 'Repository scope must be workspace-relative.',
-                {'path': raw_path},
-            )
+        path = _relative_scope_path(raw_path)
         try:
             resolved = (self._workspace / path).resolve()
         except (OSError, RuntimeError, ValueError) as exc:
@@ -198,6 +198,11 @@ class RepositoryContext:
             result = _scope_object(payload.get('result'), 'result')
             if 'error' in result:
                 continue
+            if 'resolved_scope_paths' in result:
+                for scope in _scope_list(result['resolved_scope_paths'], 'resolved_scope_paths'):
+                    directories.add(_relative_scope_path(_scope_string(scope, 'resolved_scope_paths')))
+                continue
+            # Only the legacy result schema lacks execution-time physical scopes.
             if name in ('file_read', 'file_write'):
                 directories.add(self._file_directory(result.get('path')))
             elif name == 'apply_patch':
@@ -209,16 +214,35 @@ class RepositoryContext:
                     if name == 'grep' or match.get('type') == 'file':
                         directories.add(self._file_directory(match.get('path')))
                     elif match.get('type') == 'directory':
-                        directories.add(Path(_scope_string(match.get('path'), 'path')))
+                        directories.add(self._resolve_path(_scope_string(match.get('path'), 'path')))
                     else:
                         raise _scope_error('match.type', match.get('type'))
             else:
                 call_id = _scope_string(payload.get('call_id'), 'call_id')
-                directories.add(Path(_scope_string(shell_workdirs.get(call_id), 'shell.workdir')))
+                directories.add(self._resolve_path(_scope_string(shell_workdirs.get(call_id), 'shell.workdir')))
         return tuple(directories)
 
     def _file_directory(self, value: object) -> Path:
         return self._resolve_path(_scope_string(value, 'path')).parent
+
+
+def _relative_scope_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute() or '..' in path.parts:
+        raise _error(
+            'repository_path_outside_workspace', 'Repository scope must be workspace-relative.',
+            {'path': raw_path},
+        )
+    try:
+        raw_path.encode('utf-8')
+        if '\x00' in raw_path:
+            raise ValueError('Path contains a null byte.')
+    except ValueError as exc:
+        raise _error(
+            'repository_path_invalid', 'Invalid repository scope path.',
+            {'path': raw_path, 'reason': str(exc)},
+        ) from exc
+    return path
 
 
 def _check_size(path: str, size_bytes: int, remaining_bytes: int) -> None:

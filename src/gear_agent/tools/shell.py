@@ -70,4 +70,8 @@ class ShellTool(Tool):
                 self.name,
                 {"workdir": raw_workdir},
             )
-        return self._runtime.run(command, workdir, timeout_seconds)
+        result = self._runtime.run(command, workdir, timeout_seconds)
+        return {
+            **result,
+            "resolved_scope_paths": [workdir.relative_to(self._workspace).as_posix()],
+        }

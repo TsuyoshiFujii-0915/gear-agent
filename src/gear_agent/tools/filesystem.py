@@ -60,7 +60,11 @@ class FileReadTool(Tool):
                 self.name,
                 {"path": raw_path, "reason": str(exc)},
             ) from exc
-        return {"path": raw_path, "content": content}
+        return {
+            "path": raw_path,
+            "content": content,
+            "resolved_scope_paths": [path.parent.relative_to(self._workspace).as_posix()],
+        }
 
 
 class FileWriteTool(Tool):
@@ -118,4 +122,8 @@ class FileWriteTool(Tool):
                 self.name,
                 {"path": raw_path, "reason": str(exc)},
             ) from exc
-        return {"path": raw_path, "bytes_written": len(content.encode("utf-8"))}
+        return {
+            "path": raw_path,
+            "bytes_written": len(content.encode("utf-8")),
+            "resolved_scope_paths": [path.parent.relative_to(self._workspace).as_posix()],
+        }

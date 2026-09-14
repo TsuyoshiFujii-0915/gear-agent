@@ -77,6 +77,7 @@ class ToolTests(unittest.TestCase):
                     "pattern": "**/*.py",
                     "matches": [{"path": "src/main.py", "type": "file"}],
                     "truncated": False,
+                    "resolved_scope_paths": ["src"],
                 },
             )
 
@@ -128,6 +129,7 @@ class ToolTests(unittest.TestCase):
                         }
                     ],
                     "truncated": False,
+                    "resolved_scope_paths": ["src"],
                 },
             )
 

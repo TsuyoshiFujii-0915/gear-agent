@@ -4,7 +4,7 @@ Build repository instructions from the current workspace for each agent request
 
 # Status
 
-accepted
+superseded by [ADR 0017](0017-persist-executed-physical-scopes.md)
 
 # Context
 

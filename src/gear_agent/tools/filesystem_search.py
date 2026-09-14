@@ -54,11 +54,12 @@ class GlobTool(Tool):
         pattern = required_string(arguments, "pattern", self.name)
         max_results = _required_positive_int(arguments, "max_results", self.name)
         _validate_relative_pattern(pattern, self.name)
-        matches = _glob_matches(self._workspace, pattern, max_results, self.name)
+        matches, scopes = _glob_matches(self._workspace, pattern, max_results, self.name)
         return {
             "pattern": pattern,
             "matches": matches[:max_results],
             "truncated": len(matches) > max_results,
+            "resolved_scope_paths": sorted(set(scopes[:max_results])),
         }
 
 
@@ -113,12 +114,13 @@ class GrepTool(Tool):
         regex = _compile_regex(pattern, self.name)
         path = resolve_workspace_path(self._workspace, raw_path, self.name)
         files = _searchable_files(path, raw_path, self.name)
-        matches = _grep_matches(self._workspace, files, regex, max_results, self.name)
+        matches, scopes = _grep_matches(self._workspace, files, regex, max_results, self.name)
         return {
             "path": raw_path,
             "pattern": pattern,
             "matches": matches[:max_results],
             "truncated": len(matches) > max_results,
+            "resolved_scope_paths": sorted(set(scopes[:max_results])),
         }
 
 
@@ -156,7 +158,7 @@ def _glob_matches(
     pattern: str,
     max_results: int,
     tool_name: str,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], list[str]]:
     try:
         candidates = list(workspace.glob(pattern))
     except ValueError as exc:
@@ -167,19 +169,23 @@ def _glob_matches(
             {"pattern": pattern, "reason": str(exc)},
         ) from exc
     results: list[dict[str, object]] = []
+    scopes: list[str] = []
     for candidate in sorted(candidates, key=lambda item: _relative_path(workspace, item)):
         resolved = candidate.resolve()
         relative_path = _relative_path(workspace, candidate)
         _ensure_inside_workspace(workspace, resolved, relative_path, tool_name)
+        path_type = _path_type(resolved, tool_name)
+        scope = resolved if path_type == "directory" else resolved.parent
+        scopes.append(_relative_path(workspace, scope))
         results.append(
             {
                 "path": relative_path,
-                "type": _path_type(candidate, tool_name),
+                "type": path_type,
             }
         )
         if len(results) > max_results:
             break
-    return results
+    return results, scopes
 
 
 def _path_type(path: Path, tool_name: str) -> str:
@@ -233,20 +239,22 @@ def _grep_matches(
     regex: re.Pattern[str],
     max_results: int,
     tool_name: str,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], list[str]]:
     results: list[dict[str, object]] = []
+    scopes: list[str] = []
     for file_path in sorted(files, key=lambda item: _relative_path(workspace, item)):
         resolved = file_path.resolve()
         relative_path = _relative_path(workspace, file_path)
         _ensure_inside_workspace(workspace, resolved, relative_path, tool_name)
-        text = _read_text_file(file_path, relative_path, tool_name)
+        text = _read_text_file(resolved, relative_path, tool_name)
         for line_number, line in enumerate(text.splitlines(), start=1):
             if regex.search(line) is None:
                 continue
             results.append({"path": relative_path, "line": line_number, "text": line})
+            scopes.append(_relative_path(workspace, resolved.parent))
             if len(results) > max_results:
-                return results
-    return results
+                return results, scopes
+    return results, scopes
 
 
 def _read_text_file(path: Path, relative_path: str, tool_name: str) -> str:
