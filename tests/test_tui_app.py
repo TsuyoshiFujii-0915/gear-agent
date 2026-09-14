@@ -7,6 +7,7 @@ from typing import Any
 
 from textual.widgets import Input, RichLog
 
+from gear_agent.repository import RepositoryContext
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.events import SilentAgentLoopEventSink
 from gear_agent.agent.loop import AgentLoop
@@ -132,6 +133,7 @@ class GearAppTests(unittest.IsolatedAsyncioTestCase):
                     [],
                     store,
                     SilentAgentLoopEventSink(),
+                    RepositoryContext(workspace),
                 ),
                 compaction=CompactionService(ResponsesModelAdapter(client, model_config)),
                 store=store,
@@ -200,6 +202,7 @@ class GearAppTests(unittest.IsolatedAsyncioTestCase):
                     [],
                     store,
                     SilentAgentLoopEventSink(),
+                    RepositoryContext(workspace),
                 ),
                 compaction=CompactionService(ResponsesModelAdapter(client, model_config)),
                 store=store,
