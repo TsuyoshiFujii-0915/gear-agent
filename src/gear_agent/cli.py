@@ -18,6 +18,7 @@ from gear_agent.config import (
 )
 from gear_agent.errors import GearError
 from gear_agent.model.factory import build_model_adapter
+from gear_agent.repository import RepositoryContext
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.store.sessions import JsonlSessionDiscovery
 from gear_agent.tools.configured import build_configured_tools
@@ -126,6 +127,7 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
         tools,
         store,
         event_sink,
+        RepositoryContext(workspace),
     )
     compaction = CompactionService(adapter)
     app = GearApp(

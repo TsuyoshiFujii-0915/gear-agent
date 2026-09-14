@@ -1,6 +1,9 @@
+from pathlib import Path
+import tempfile
 import unittest
 from typing import Any
 
+from gear_agent.repository import RepositoryContext
 from gear_agent.agent.events import (
     AgentLoopEvent,
     ModelRequestStarted,
@@ -143,6 +146,11 @@ class RecordingEventSink:
 
 
 class AgentLoopTests(unittest.TestCase):
+    def setUp(self) -> None:
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        self.repository_context = RepositoryContext(Path(workspace.name))
+
     def test_runs_tool_call_and_returns_final_text(self) -> None:
         transport = SequencedTransport(
             [
@@ -175,7 +183,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [EchoTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [EchoTool()], store, event_sink, self.repository_context)
 
         result = loop.run_turn("session-1", "hello", 4, 30)
 
@@ -253,7 +261,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [EchoTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [EchoTool()], store, event_sink, self.repository_context)
 
         loop.run_turn("session-1", "hello", 4, 30)
         result = loop.run_turn("session-1", "continue", 4, 30)
@@ -316,6 +324,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             SilentAgentLoopEventSink(),
+            self.repository_context,
         )
 
         result = loop.run_turn("session-1", "continue", 4, 30)
@@ -364,6 +373,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             SilentAgentLoopEventSink(),
+            self.repository_context,
         )
 
         loop.run_turn("session-1", "new request", 4, 30)
@@ -432,6 +442,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             SilentAgentLoopEventSink(),
+            self.repository_context,
         )
 
         loop.run_turn("session-1", "continue", 4, 30)
@@ -475,6 +486,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             SilentAgentLoopEventSink(),
+            self.repository_context,
         )
 
         with self.assertRaises(GearError) as raised:
@@ -502,6 +514,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             SilentAgentLoopEventSink(),
+            self.repository_context,
         )
 
         with self.assertRaises(GearError) as raised:
@@ -550,7 +563,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [LargeOutputTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [LargeOutputTool()], store, event_sink, self.repository_context)
 
         loop.run_turn("session-1", "produce large output", 4, 30)
         loop.run_turn("session-1", "continue", 4, 30)
@@ -594,7 +607,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [RecoverableFailingTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [RecoverableFailingTool()], store, event_sink, self.repository_context)
 
         result = loop.run_turn("session-1", "hello", 4, 30)
 
@@ -676,6 +689,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             SilentAgentLoopEventSink(),
+            self.repository_context,
         ).run_turn("session-1", "start", 4, 30)
         resumed_events = RecordingEventSink()
         result = AgentLoop(
@@ -683,6 +697,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             resumed_events,
+            self.repository_context,
         ).run_turn("session-1", "continue", 4, 30)
 
         self.assertEqual(result.final_text, "resumed")
@@ -769,6 +784,7 @@ class AgentLoopTests(unittest.TestCase):
             [],
             store,
             event_sink,
+            self.repository_context,
         ).run_turn("session-1", "continue", 4, 30)
 
         request_input = transport.payloads[0]["input"]
@@ -834,6 +850,7 @@ class AgentLoopTests(unittest.TestCase):
             [EchoTool()],
             MemoryContextStore(),
             SilentAgentLoopEventSink(),
+            self.repository_context,
         ).run_turn("session-1", "hello", 4, 30)
 
         self.assertNotIn("unexpected-opaque-state", str(transport.payloads[1]["input"]))
@@ -863,7 +880,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = SilentAgentLoopEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [UnrecoverableFailingTool()], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [UnrecoverableFailingTool()], store, event_sink, self.repository_context)
 
         with self.assertRaises(GearError):
             loop.run_turn("session-1", "hello", 4, 30)
@@ -907,7 +924,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [], store, event_sink, self.repository_context)
 
         result = loop.run_turn("session-1", "hello", 4, 30)
 
@@ -958,7 +975,7 @@ class AgentLoopTests(unittest.TestCase):
         )
         store = MemoryContextStore()
         event_sink = RecordingEventSink()
-        loop = AgentLoop(ResponsesModelAdapter(client, config), [], store, event_sink)
+        loop = AgentLoop(ResponsesModelAdapter(client, config), [], store, event_sink, self.repository_context)
 
         with self.assertRaises(GearError) as error:
             loop.run_turn("session-1", "hello", 4, 30)

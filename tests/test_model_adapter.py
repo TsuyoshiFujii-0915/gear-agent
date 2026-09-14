@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from gear_agent.repository import RepositoryContext
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError
 from gear_agent.model.adapter import ModelAdapter
@@ -70,7 +71,7 @@ def test_invalid_output_fails_in_model_layer(output: Any) -> None:
     assert error.value.origin == 'responses_adapter'
 
 
-def test_loop_and_compaction_accept_provider_neutral_model_results() -> None:
+def test_loop_and_compaction_accept_provider_neutral_model_results(tmp_path: Path) -> None:
     from unittest.mock import Mock
 
     from gear_agent.agent.compaction import CompactionService
@@ -98,7 +99,7 @@ def test_loop_and_compaction_accept_provider_neutral_model_results() -> None:
     adapter.create_response.return_value = response
     store = MemoryContextStore()
 
-    result = AgentLoop(adapter, [], store, SilentAgentLoopEventSink()).run_turn('session', 'hello', 1, 30)
+    result = AgentLoop(adapter, [], store, SilentAgentLoopEventSink(), RepositoryContext(tmp_path)).run_turn('session', 'hello', 1, 30)
     assert result.final_text == 'done'
     assert store.load('session')[1]['payload'] == {'provider_result': 'done'}
     assert CompactionService(adapter).compact('session', store, 30) == 'done'

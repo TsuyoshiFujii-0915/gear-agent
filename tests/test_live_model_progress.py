@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from textual.widgets import Input, RichLog
 
+from gear_agent.repository import RepositoryContext
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.events import (
     AgentLoopEvent,
@@ -227,6 +228,7 @@ def _create_app(
             [],
             store,
             progress_sink,
+            RepositoryContext(workspace),
         ),
         compaction=CompactionService(adapter),
         store=store,
@@ -245,6 +247,11 @@ def _create_app(
 
 
 class AgentModelProgressTests(unittest.TestCase):
+    def setUp(self) -> None:
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        self.repository_context = RepositoryContext(Path(workspace.name))
+
     def test_agent_loop_publishes_only_public_displayable_model_deltas(self) -> None:
         reasoning_item = {
             "id": "reasoning_1",
@@ -303,6 +310,7 @@ class AgentModelProgressTests(unittest.TestCase):
             [],
             store,
             sink,
+            self.repository_context,
         ).run_turn("session-1", "hello", 2, 30, 5)
 
         public_reasoning = [

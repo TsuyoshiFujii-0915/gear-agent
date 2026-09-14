@@ -28,8 +28,9 @@ class ResponsesModelResponse:
 
     @property
     def persisted_payload(self) -> dict[str, Any]:
-        """Returns the unchanged legacy payload or scoped replay envelope."""
-        return model_response_event_payload(self.response, self.policy)
+        """Returns canonical output without echoed request-level instructions."""
+        response = {key: value for key, value in self.response.items() if key != 'instructions'}
+        return model_response_event_payload(response, self.policy)
 
     @property
     def replayed_output(self) -> ReplayedOutput:

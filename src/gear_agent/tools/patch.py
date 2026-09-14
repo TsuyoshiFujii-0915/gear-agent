@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shlex
 import subprocess
 
 from gear_agent.tools.base import Tool
-from gear_agent.tools.validation import required_string, tool_error
+from gear_agent.tools.validation import required_string, resolve_workspace_path, tool_error
 
 
 class ApplyPatchTool(Tool):
@@ -68,14 +69,33 @@ class ApplyPatchTool(Tool):
                 self.name,
                 {"stdout": completed.stdout, "stderr": completed.stderr},
             )
-        return {"changed_files": _changed_files_from_patch_output(completed.stdout)}
+        changed_files = _changed_files_from_patch_output(completed.stdout)
+        scopes = {
+            resolve_workspace_path(self._workspace, path, self.name)
+            .parent.relative_to(self._workspace).as_posix()
+            for path in changed_files
+        }
+        return {"changed_files": changed_files, "resolved_scope_paths": sorted(scopes)}
 
 
 def _changed_files_from_patch_output(output: str) -> list[str]:
     changed_files: list[str] = []
     for line in output.splitlines():
         if line.startswith("patching file "):
-            changed_files.append(line.removeprefix("patching file "))
+            reported_path = line.removeprefix("patching file ")
+            try:
+                paths = shlex.split(reported_path, comments=False, posix=True)
+            except ValueError as exc:
+                raise tool_error(
+                    "patch_output_invalid", "Cannot decode the patched file path.",
+                    "apply_patch", {"path": reported_path, "reason": str(exc)},
+                ) from exc
+            if len(paths) != 1:
+                raise tool_error(
+                    "patch_output_invalid", "Expected exactly one patched file path.",
+                    "apply_patch", {"path": reported_path},
+                )
+            changed_files.append(paths[0])
     return changed_files
 
 

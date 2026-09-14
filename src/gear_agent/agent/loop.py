@@ -24,6 +24,7 @@ from gear_agent.model.events import (
     ModelTextDelta as ProviderTextDelta,
 )
 from gear_agent.model.replay import ReasoningReplayDiagnostic
+from gear_agent.repository import RepositoryContext
 from gear_agent.store.base import ContextStore
 from gear_agent.tools.base import Tool
 from gear_agent.tools.registry import ToolRegistry
@@ -69,12 +70,14 @@ class AgentLoop:
         tools: list[Tool],
         store: ContextStore,
         event_sink: AgentLoopEventSink,
+        repository_context: RepositoryContext,
     ) -> None:
         self._adapter = adapter
         self._replay_policy = adapter.replay_policy
         self._registry = ToolRegistry(tools)
         self._store = store
         self._event_sink = event_sink
+        self._repository_context = repository_context
 
     def run_turn(
         self,
@@ -117,6 +120,9 @@ class AgentLoop:
         pending_replay_diagnostic: ReasoningReplayDiagnostic | None = None
 
         for iteration in range(1, max_iterations + 1):
+            instructions = self._repository_context.instructions(
+                AGENT_INSTRUCTIONS, self._store.load(session_id),
+            )
             if pending_replay_diagnostic is not None:
                 self._publish_replay_diagnostic(
                     session_id,
@@ -129,7 +135,7 @@ class AgentLoop:
             response = self._adapter.create_response(
                 input_items,
                 tools,
-                AGENT_INSTRUCTIONS,
+                instructions,
                 timeout_seconds,
                 stream_idle_timeout_seconds,
                 _AgentModelProgressSink(
