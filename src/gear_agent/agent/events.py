@@ -1,9 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Literal, Protocol, TypeAlias
 
 from gear_agent.config import ReasoningReplayMode
+from gear_agent.context_budget import ContextBudgetDiagnostic
+
+
+@dataclass(frozen=True)
+class ContextBudgetEvaluated:
+    """Content-free accounting at a request or compaction decision boundary.
+
+    Attributes:
+        session_id: Session identifier.
+        iteration: Agent iteration whose request is being prepared.
+        phase: Whether this measures the original, summary, or rebuilt request.
+        diagnostic: Component estimates and effective limit.
+        auto_compaction_triggered: Whether this decision triggered compaction.
+        failed: Whether the estimate prevents dispatch.
+    """
+
+    session_id: str
+    iteration: int
+    phase: Literal['before', 'compaction', 'after']
+    diagnostic: ContextBudgetDiagnostic
+    auto_compaction_triggered: bool
+    failed: bool
 
 
 @dataclass(frozen=True)
@@ -110,6 +132,7 @@ class ToolUseFinished:
 
 AgentLoopEvent: TypeAlias = (
     ModelRequestStarted
+    | ContextBudgetEvaluated
     | ModelTextDelta
     | ModelReasoningSummaryDelta
     | ReasoningReplayEvaluated

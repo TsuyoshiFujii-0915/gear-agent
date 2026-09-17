@@ -128,6 +128,7 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
         store,
         event_sink,
         RepositoryContext(workspace),
+        context_budget=config.context_budget,
     )
     compaction = CompactionService(adapter)
     app = GearApp(
