@@ -366,6 +366,9 @@ uv run gear run --prompt-file task.md > answer.txt 2> run.log
 
 履歴は通常の `session_dir/<UUID>.jsonl` に保存され、`gear resume <UUID>` でTUIから
 再開できます。診断は認証情報を伏せ、任意のレスポンス本文を含むerror detailsは出しません。
+実行中の構造化エラーは、同じ診断内容を既存の `turn_error` として一度だけ保存し、
+再開時にも停止理由を表示します。失敗の記録自体を書き込めない場合は、元のタスクエラーと
+終了コードを維持し、stderrのJSONに `persistence_error` を追加します。
 回答とセッション内のタスク・モデル・tool本文には、通常の保存・出力ルールが適用されます。
 
 Pythonからは `gear_agent.headless.run_task` の `RunResult` と `RunSpec` で、

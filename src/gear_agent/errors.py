@@ -46,3 +46,20 @@ def gear_error(
     """
 
     return GearError(error_type, message, origin, recoverable, details)
+
+
+def safe_error_payload(error: GearError, secrets: tuple[str, ...]) -> dict[str, str]:
+    """Projects an error for diagnostics without copying arbitrary details.
+
+    Args:
+        error: Original structured failure.
+        secrets: Nonempty credentials and endpoint URLs to redact.
+
+    Returns:
+        Error identity and message with configured secrets removed.
+    """
+    payload = {'type': error.error_type, 'origin': error.origin, 'message': error.message}
+    for secret in sorted(secrets, key=len, reverse=True):
+        for key, value in payload.items():
+            payload[key] = value.replace(secret, '[REDACTED]')
+    return payload

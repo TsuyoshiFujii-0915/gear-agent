@@ -16,8 +16,10 @@ from gear_agent.config import (
     initialize_config,
     load_config,
 )
-from gear_agent.errors import GearError
-from gear_agent.headless import read_task_prompt, run_task, validate_headless_runtime
+from gear_agent.errors import GearError, safe_error_payload
+from gear_agent.headless import (
+    diagnostic_secrets, read_task_prompt, run_task, validate_headless_runtime,
+)
 from gear_agent.runtime import AgentRuntime, build_agent_runtime
 from gear_agent.store.sessions import JsonlSessionDiscovery
 
@@ -144,11 +146,7 @@ def _run_headless(args: Namespace, environment: Mapping[str, str]) -> int:
     try:
         prompt = read_task_prompt(args.prompt, args.prompt_file)
         agent = _prepare_runtime(args, environment, SilentAgentLoopEventSink())
-        secrets = tuple(
-            config.api_key for config in
-            (agent.config.model, agent.config.web_search, agent.config.web_fetch)
-            if config is not None and config.api_key
-        )
+        secrets = diagnostic_secrets(agent.config)
         validate_headless_runtime(agent)
         session_id = str(uuid4())
         print(f"session_id={session_id}", file=sys.stderr, flush=True)
@@ -179,12 +177,11 @@ def _run_headless(args: Namespace, environment: Mapping[str, str]) -> int:
 
 
 def _print_headless_error(error: GearError, secrets: tuple[str, ...]) -> None:
-    # Details can contain remote response bodies, URLs or tool arguments.
-    message = error.message
-    for secret in sorted(secrets, key=len, reverse=True):
-        message = message.replace(secret, "[REDACTED]")
-    print(json.dumps({"error": {"type": error.error_type, "origin": error.origin,
-                               "message": message}}, ensure_ascii=False), file=sys.stderr)
+    diagnostic = {"error": safe_error_payload(error, secrets)}
+    cause = error.__cause__
+    if isinstance(cause, GearError) and cause.error_type == 'turn_error_write_failed':
+        diagnostic['persistence_error'] = safe_error_payload(cause, secrets)
+    print(json.dumps(diagnostic, ensure_ascii=False), file=sys.stderr)
 
 
 def _session_id_from_args(args: Namespace, session_dir: Path) -> str:

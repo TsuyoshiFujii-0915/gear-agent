@@ -5,7 +5,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from gear_agent.agent.loop import TurnResult
-from gear_agent.errors import GearError
+from gear_agent.config import AppConfig
+from gear_agent.errors import GearError, safe_error_payload
 from gear_agent.model.replay import endpoint_identity
 from gear_agent.runtime import AgentRuntime
 
@@ -133,16 +134,50 @@ def run_task(agent: AgentRuntime, session_id: str, prompt: TaskPrompt) -> RunRes
         Canonical completed answer with effective execution inputs.
 
     Raises:
-        GearError: If the model, tools, repository context or budget fails.
+        GearError: If the model, tools, repository context or budget fails. The
+            original error is re-raised after recording turn_error. If recording
+            fails, its cause is a safe turn_error_write_failed GearError.
         OSError: If local session persistence fails.
     """
     spec = describe_run(agent, session_id, prompt)
     runtime = agent.runtime
-    turn = agent.loop.run_turn(
-        session_id, prompt.text, runtime.max_iterations, runtime.model_timeout_seconds,
-        runtime.model_stream_idle_timeout_seconds,
-    )
+    try:
+        turn = agent.loop.run_turn(
+            session_id, prompt.text, runtime.max_iterations, runtime.model_timeout_seconds,
+            runtime.model_stream_idle_timeout_seconds,
+        )
+    except GearError as error:
+        diagnostic = safe_error_payload(error, diagnostic_secrets(agent.config))
+        try:
+            agent.store.append(session_id, 'turn_error', {
+                'text': f"{diagnostic['origin']}: {diagnostic['message']}",
+                'error': diagnostic,
+            })
+        except (OSError, UnicodeError) as write_error:
+            raise error from GearError(
+                'turn_error_write_failed',
+                f'Could not save turn_error to the session store ({type(write_error).__name__}).',
+                'headless', True, {'session_id': session_id},
+            )
+        raise
     return RunResult(spec, turn)
+
+
+def diagnostic_secrets(config: AppConfig) -> tuple[str, ...]:
+    """Collects configured values that must not enter error diagnostics.
+
+    Args:
+        config: Effective settings with resolved credentials.
+
+    Returns:
+        Nonempty API keys and the full endpoint URL, which may embed credentials.
+    """
+    return tuple(value for value in (
+        config.model.url,
+        config.model.api_key,
+        config.web_search.api_key if config.web_search is not None else None,
+        config.web_fetch.api_key if config.web_fetch is not None else None,
+    ) if value)
 
 
 def validate_headless_runtime(agent: AgentRuntime) -> None:
