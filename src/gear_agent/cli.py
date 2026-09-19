@@ -4,26 +4,24 @@ from argparse import ArgumentParser, Namespace
 from typing import Mapping
 from pathlib import Path
 from uuid import uuid4
+import json
 import os
 import sys
 
 from gear_agent.agent.compaction import CompactionService
-from gear_agent.agent.loop import AgentLoop
+from gear_agent.agent.events import AgentLoopEventSink, SilentAgentLoopEventSink
 from gear_agent.config import (
-    DEFAULT_DOCKER_IMAGE,
     RuntimeConfig,
     discover_config_path,
     initialize_config,
     load_config,
 )
-from gear_agent.errors import GearError
-from gear_agent.model.factory import build_model_adapter
-from gear_agent.repository import RepositoryContext
-from gear_agent.store.jsonl import JsonlContextStore
+from gear_agent.errors import GearError, safe_error_payload
+from gear_agent.headless import (
+    diagnostic_secrets, read_task_prompt, run_task, validate_headless_runtime,
+)
+from gear_agent.runtime import AgentRuntime, build_agent_runtime
 from gear_agent.store.sessions import JsonlSessionDiscovery
-from gear_agent.tools.configured import build_configured_tools
-from gear_agent.tools.runtimes import DockerShellRuntime
-from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
 
 
 def main() -> None:
@@ -46,6 +44,8 @@ def run_cli(argv: list[str], environment: Mapping[str, str]) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "run":
+        return _run_headless(args, environment)
     try:
         if args.command == "init":
             _run_init(args, environment)
@@ -100,49 +100,88 @@ def _build_parser() -> ArgumentParser:
         action="store_true",
         help="Resume the most recently updated session.",
     )
+    run_parser = subparsers.add_parser(
+        "run", help="Execute one task without the TUI; global options precede run.",
+    )
+    task_input = run_parser.add_mutually_exclusive_group(required=True)
+    task_input.add_argument("--prompt", help="Inline task prompt.")
+    task_input.add_argument("--prompt-file", type=Path, help="UTF-8 task prompt file.")
     return parser
 
 
-def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
+def _prepare_runtime(
+    args: Namespace, environment: Mapping[str, str], event_sink: AgentLoopEventSink,
+) -> AgentRuntime:
     config_path = args.config
     if config_path is None:
         config_path = discover_config_path(Path.cwd(), _home_dir(environment))
     config = load_config(config_path, environment)
     runtime = _runtime_from_args(config.runtime, args)
-    workspace = runtime.workdir.resolve()
-    store = JsonlContextStore(runtime.session_dir)
-    session_id = _session_id_from_args(args, runtime.session_dir)
-    shell_runtime = DockerShellRuntime(workspace, DEFAULT_DOCKER_IMAGE, runtime.network_enabled)
-    tools = build_configured_tools(
-        config.tool,
-        config.web_search,
-        config.web_fetch,
-        workspace,
-        shell_runtime,
-    )
+    return build_agent_runtime(config, runtime, event_sink)
+
+
+def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
+    from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
+
     event_sink = TextualAgentLoopEventSink()
-    adapter = build_model_adapter(config.model)
-    loop = AgentLoop(
-        adapter,
-        tools,
-        store,
-        event_sink,
-        RepositoryContext(workspace),
-        context_budget=config.context_budget,
-    )
-    compaction = CompactionService(adapter)
+    agent = _prepare_runtime(args, environment, event_sink)
+    session_id = _session_id_from_args(args, agent.runtime.session_dir)
+    compaction = CompactionService(agent.adapter)
     app = GearApp(
-        model=config.model.model,
+        model=agent.config.model.model,
         session_id=session_id,
-        workspace=workspace,
-        agent_loop=loop,
+        workspace=agent.workspace,
+        agent_loop=agent.loop,
         compaction=compaction,
-        store=store,
-        runtime=runtime,
-        model_config=config.model,
+        store=agent.store,
+        runtime=agent.runtime,
+        model_config=agent.config.model,
     )
     event_sink.bind(app)
     app.run()
+
+
+def _run_headless(args: Namespace, environment: Mapping[str, str]) -> int:
+    secrets: tuple[str, ...] = ()
+    try:
+        prompt = read_task_prompt(args.prompt, args.prompt_file)
+        agent = _prepare_runtime(args, environment, SilentAgentLoopEventSink())
+        secrets = diagnostic_secrets(agent.config)
+        validate_headless_runtime(agent)
+        session_id = str(uuid4())
+        print(f"session_id={session_id}", file=sys.stderr, flush=True)
+        try:
+            result = run_task(agent, session_id, prompt)
+        except GearError as exc:
+            _print_headless_error(exc, secrets)
+            return 3
+        print(result.turn.final_text)
+    except GearError as exc:
+        _print_headless_error(exc, secrets)
+        return 1
+    except OSError as exc:
+        error = GearError(
+            "runtime_io_failed", f"Local runtime I/O failed: {exc.strerror} ({exc.filename}).",
+            "headless", True, {"errno": exc.errno},
+        )
+        _print_headless_error(error, secrets)
+        return 1
+    except UnicodeError:
+        error = GearError(
+            "runtime_encoding_invalid", "Runtime input is not valid UTF-8 text.",
+            "headless", True, {},
+        )
+        _print_headless_error(error, secrets)
+        return 1
+    return 0
+
+
+def _print_headless_error(error: GearError, secrets: tuple[str, ...]) -> None:
+    diagnostic = {"error": safe_error_payload(error, secrets)}
+    cause = error.__cause__
+    if isinstance(cause, GearError) and cause.error_type == 'turn_error_write_failed':
+        diagnostic['persistence_error'] = safe_error_payload(cause, secrets)
+    print(json.dumps(diagnostic, ensure_ascii=False), file=sys.stderr)
 
 
 def _session_id_from_args(args: Namespace, session_dir: Path) -> str:

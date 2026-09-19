@@ -138,7 +138,7 @@ def reasoning_replay_policy(config: ModelConfig) -> ReasoningReplayPolicy:
         mode=config.reasoning_replay,
         current_scope=ModelReplayScope(
             protocol=RESPONSES_PROTOCOL,
-            endpoint_identity=_endpoint_identity(config.url, config.api_key),
+            endpoint_identity=endpoint_identity(config.url, config.api_key),
             model=config.model,
         ),
     )
@@ -324,7 +324,16 @@ def strip_opaque_reasoning_from_event(
     return copied_payload
 
 
-def _endpoint_identity(url: str, api_key: str | None) -> str:
+def endpoint_identity(url: str, api_key: str | None) -> str:
+    """Fingerprints an endpoint while excluding the configured credential.
+
+    Args:
+        url: Endpoint whose userinfo/fragment policy is validated by the caller.
+        api_key: Configured credential to exclude from identity material.
+
+    Returns:
+        SHA-256 identity shared by replay scopes and run metadata.
+    """
     identity_material = _endpoint_identity_material(url, api_key)
     digest = sha256(identity_material.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
