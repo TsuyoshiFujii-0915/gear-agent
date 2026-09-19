@@ -175,7 +175,8 @@ class HeadlessCliTests(unittest.TestCase):
     def test_streaming_outputs_only_canonical_answer_once_without_loading_textual(self) -> None:
         (self.root / 'textual.py').write_text('raise RuntimeError("Textual must not load")\n')
         fixture = Path(__file__).parent / 'fixtures/responses/text.sse'
-        with model_endpoint([(200, 'text/event-stream', fixture.read_bytes())]) as (url, requests):
+        body = fixture.read_bytes() + b'\n'
+        with model_endpoint([(200, 'text/event-stream', body)]) as (url, requests):
             self.configure(url, True, '')
             result = self.invoke(['run', '--prompt', 'hello'])
         self.assertEqual(result.returncode, 0, result.stderr)
