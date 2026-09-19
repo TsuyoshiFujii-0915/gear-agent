@@ -9,6 +9,7 @@ from gear_agent.config import AppConfig, DEFAULT_DOCKER_IMAGE, RuntimeConfig
 from gear_agent.model.adapter import ModelAdapter
 from gear_agent.model.factory import build_model_adapter
 from gear_agent.repository import RepositoryContext
+from gear_agent.observation import RunObserver
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.tools.configured import build_configured_tools
 from gear_agent.tools.runtimes import DockerShellRuntime
@@ -28,6 +29,7 @@ class AgentRuntime:
 
 def build_agent_runtime(
     config: AppConfig, runtime: RuntimeConfig, event_sink: AgentLoopEventSink,
+    observer: RunObserver | None = None,
 ) -> AgentRuntime:
     """Constructs the production harness without creating presentation objects.
 
@@ -35,6 +37,7 @@ def build_agent_runtime(
         config: Loaded application configuration.
         runtime: Effective runtime after CLI overrides.
         event_sink: Presentation-specific progress consumer.
+        observer: Existing TUI and embedding callers omit run-only observations.
 
     Returns:
         Configured agent, model adapter, tools, repository context and session store.
@@ -48,6 +51,6 @@ def build_agent_runtime(
     adapter = build_model_adapter(config.model)
     loop = AgentLoop(
         adapter, tools, store, event_sink, RepositoryContext(workspace),
-        context_budget=config.context_budget,
+        context_budget=config.context_budget, observer=observer,
     )
     return AgentRuntime(config, runtime, workspace, store, adapter, loop)

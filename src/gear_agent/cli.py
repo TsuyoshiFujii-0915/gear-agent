@@ -9,7 +9,7 @@ import os
 import sys
 
 from gear_agent.agent.compaction import CompactionService
-from gear_agent.agent.events import AgentLoopEventSink, SilentAgentLoopEventSink
+from gear_agent.agent.events import AgentLoopEventSink
 from gear_agent.config import (
     RuntimeConfig,
     discover_config_path,
@@ -18,9 +18,12 @@ from gear_agent.config import (
 )
 from gear_agent.errors import GearError, safe_error_payload
 from gear_agent.headless import (
-    diagnostic_secrets, read_task_prompt, run_task, validate_headless_runtime,
+    diagnostic_secrets, read_task_prompt, validate_headless_runtime,
 )
 from gear_agent.runtime import AgentRuntime, build_agent_runtime
+from gear_agent.observation import RunObserver
+from gear_agent.run_artifacts import run_with_artifacts
+from gear_agent.run_collector import EvalRunCollector
 from gear_agent.store.sessions import JsonlSessionDiscovery
 
 
@@ -106,18 +109,24 @@ def _build_parser() -> ArgumentParser:
     task_input = run_parser.add_mutually_exclusive_group(required=True)
     task_input.add_argument("--prompt", help="Inline task prompt.")
     task_input.add_argument("--prompt-file", type=Path, help="UTF-8 task prompt file.")
+    run_parser.add_argument(
+        "--run-dir", type=Path,
+        help="Exact new artifact directory; defaults to <workspace>/.gear/runs/<run-id>.",
+    )
     return parser
 
 
 def _prepare_runtime(
     args: Namespace, environment: Mapping[str, str], event_sink: AgentLoopEventSink,
+    observer: RunObserver | None = None,
 ) -> AgentRuntime:
+    """Composes services; interactive callers omit the optional run observer."""
     config_path = args.config
     if config_path is None:
         config_path = discover_config_path(Path.cwd(), _home_dir(environment))
     config = load_config(config_path, environment)
     runtime = _runtime_from_args(config.runtime, args)
-    return build_agent_runtime(config, runtime, event_sink)
+    return build_agent_runtime(config, runtime, event_sink, observer)
 
 
 def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
@@ -145,16 +154,17 @@ def _run_headless(args: Namespace, environment: Mapping[str, str]) -> int:
     secrets: tuple[str, ...] = ()
     try:
         prompt = read_task_prompt(args.prompt, args.prompt_file)
-        agent = _prepare_runtime(args, environment, SilentAgentLoopEventSink())
+        collector = EvalRunCollector()
+        agent = _prepare_runtime(args, environment, collector, collector)
         secrets = diagnostic_secrets(agent.config)
         validate_headless_runtime(agent)
         session_id = str(uuid4())
         print(f"session_id={session_id}", file=sys.stderr, flush=True)
         try:
-            result = run_task(agent, session_id, prompt)
+            result = run_with_artifacts(agent, session_id, prompt, args.run_dir, collector, environment)
         except GearError as exc:
             _print_headless_error(exc, secrets)
-            return 3
+            return 1 if exc.origin == "run_artifacts" else 3
         print(result.turn.final_text)
     except GearError as exc:
         _print_headless_error(exc, secrets)

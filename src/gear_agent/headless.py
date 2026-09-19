@@ -66,7 +66,7 @@ def read_task_prompt(inline: str | None, path: Path | None) -> TaskPrompt:
         except (OSError, UnicodeError) as exc:
             raise GearError('prompt_read_failed', f'Cannot read UTF-8 prompt file: {path}',
                             'headless', True, {'path': str(path)}) from exc
-        prompt = TaskPrompt(text, str(path.resolve()))
+        prompt = TaskPrompt(text, str(path.absolute()))
     else:
         assert inline is not None
         prompt = TaskPrompt(inline, 'inline')

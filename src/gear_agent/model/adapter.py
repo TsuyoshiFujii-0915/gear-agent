@@ -5,7 +5,7 @@ from typing import Any, Protocol
 
 from gear_agent.model.events import ModelProgressEventSink
 from gear_agent.model.replay import ReasoningReplayPolicy, ReplayedOutput
-from gear_agent.model.types import FunctionCall, ModelHistory
+from gear_agent.model.types import FunctionCall, ModelHistory, ModelUsage
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,11 @@ class ModelCapabilities:
 
 class ModelResponse(Protocol):
     """Completed result with canonical persistence and semantic accessors."""
+
+    @property
+    def usage(self) -> ModelUsage:
+        """Returns provider-reported token categories; absent categories are null."""
+        ...
 
     @property
     def persisted_payload(self) -> dict[str, Any]:

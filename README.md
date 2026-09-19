@@ -391,6 +391,28 @@ Shell tool の Docker image はコード側で `python:3.11-slim` に固定し�
 
 `/compact` は現在のセッション履歴をモデルへ送り、継続用の要約を `.gear/sessions` に保存します。
 
+## 評価実行の成果物
+
+`gear run` は実行ごとに `<workspace>/.gear/runs/<run-id>/` を作成し、
+設定・結果の `run.json`、計測値の `metrics.json`、独立したセッション履歴
+`events.jsonl`、成功時の `final.txt`、Git 状態と追跡済みファイルの差分を保存します。
+実行 ID はセッション ID と独立しています。保存先を指定する例です。
+
+```bash
+uv run gear run --prompt-file task.txt --run-dir ../results/case-001
+```
+
+`--run-dir` は今回の実行専用ディレクトリです。既存の保存先は上書きしません。
+`run.json` の `status` が `success` または `failure` のとき記録が完了しています。
+`running` のままの記録は未完了です。実行に失敗した場合も履歴と計測値を保存し、
+モデルの途中出力を最終回答にはしません。
+
+使用量の未報告項目は `null` とし、モデル要求・ツール実行時間は単調時計で計測します。
+自動コンパクションのモデル要求も計測対象です。Git の差分は開始時 HEAD 基準なので、
+開始時に未コミット変更があれば既存の変更も含みます。秘密情報を除去した設定・診断を
+保存しますが、会話のコピーには既存仕様の暗号化 reasoning state が残ることがあります。
+詳細は [成果物のスキーマと制約](docs/run-artifacts.md) を参照してください。
+
 ## ツール
 
 モデルには次の関数ツールを渡します。

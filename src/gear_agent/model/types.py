@@ -29,3 +29,12 @@ class ModelHistory:
 
     items: list[object]
     diagnostic: ReasoningReplayDiagnostic
+
+
+@dataclass(frozen=True)
+class ModelUsage:
+    """Provider-reported token counts; missing categories remain unavailable."""
+
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None

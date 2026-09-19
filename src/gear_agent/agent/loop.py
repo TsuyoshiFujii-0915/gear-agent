@@ -32,6 +32,7 @@ from gear_agent.model.events import (
 )
 from gear_agent.model.replay import ReasoningReplayDiagnostic
 from gear_agent.repository import RepositoryContext
+from gear_agent.observation import RunObserver, execute_tool, record_model_usage, request_model
 from gear_agent.store.base import ContextStore
 from gear_agent.tools.base import Tool
 from gear_agent.tools.registry import ToolRegistry
@@ -79,6 +80,7 @@ class AgentLoop:
         event_sink: AgentLoopEventSink,
         repository_context: RepositoryContext,
         context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET,
+        observer: RunObserver | None = None,
     ) -> None:
         """Binds runtime services and the effective context policy.
 
@@ -90,6 +92,7 @@ class AgentLoop:
             repository_context: Current workspace instruction loader.
             context_budget: Defaults to disabled for existing embedding callers,
                 matching the documented legacy configuration behavior.
+            observer: Omitted by existing TUI/embedding callers to disable run-only observations.
         """
         self._adapter = adapter
         self._replay_policy = adapter.replay_policy
@@ -99,7 +102,8 @@ class AgentLoop:
         self._repository_context = repository_context
         self._context_budget = context_budget
         self._budget_manager = ContextBudgetManager(context_budget, ByteTokenEstimator())
-        self._compaction = CompactionService(adapter)
+        self._observer = observer
+        self._compaction = CompactionService(adapter, observer)
 
     def run_turn(
         self,
@@ -160,23 +164,21 @@ class AgentLoop:
             self._event_sink.publish(
                 ModelRequestStarted(session_id=session_id, iteration=iteration)
             )
-            response = self._adapter.create_response(
-                request.input_value,
-                request.tools,
-                request.instructions,
-                timeout_seconds,
-                stream_idle_timeout_seconds,
-                _AgentModelProgressSink(
-                    self._event_sink,
-                    session_id,
-                    iteration,
-                ),
+            if self._observer is not None:
+                self._observer.record('repository_instructions', {
+                    'iteration': iteration, 'files': self._repository_context.instruction_metadata,
+                })
+            response = request_model(
+                self._adapter, request, timeout_seconds, stream_idle_timeout_seconds,
+                _AgentModelProgressSink(self._event_sink, session_id, iteration),
+                self._observer, 'agent',
             )
             self._store.append(
                 session_id,
                 "model_response",
                 response.persisted_payload,
             )
+            record_model_usage(response, self._observer)
             replayed_output = response.replayed_output
             output_items = replayed_output.items
             function_calls = response.function_calls
@@ -184,6 +186,7 @@ class AgentLoop:
                 final_text = response.text
                 if _has_final_text(final_text):
                     self._store.append(session_id, "assistant_message", {"text": final_text})
+                    self._complete_iteration(iteration)
                     return TurnResult(final_text=final_text, iterations=iteration)
                 if not finalization_retry_used and iteration < max_iterations:
                     finalization_retry_used = True
@@ -194,6 +197,7 @@ class AgentLoop:
                     pending_replay_diagnostic = _nonempty_replay_diagnostic(
                         replayed_output.diagnostic
                     )
+                    self._complete_iteration(iteration)
                     continue
                 raise gear_error(
                     "final_text_missing",
@@ -228,7 +232,10 @@ class AgentLoop:
                     )
                 )
                 try:
-                    tool_result = self._registry.run(function_call.name, function_call.arguments)
+                    tool_result = execute_tool(
+                        self._registry, function_call.name, function_call.arguments,
+                        function_call.call_id, self._observer,
+                    )
                 except GearError as exc:
                     if not exc.recoverable:
                         raise
@@ -253,6 +260,7 @@ class AgentLoop:
                     )
                 )
                 input_items.append(self._adapter.tool_result_item(function_call.call_id, tool_result))
+            self._complete_iteration(iteration)
 
         raise gear_error(
             "iteration_limit_reached",
@@ -261,6 +269,10 @@ class AgentLoop:
             True,
             {"max_iterations": max_iterations},
         )
+
+    def _complete_iteration(self, iteration: int) -> None:
+        if self._observer is not None:
+            self._observer.record('iteration_completed', {'iteration': iteration})
 
     def _budgeted_request(
         self,
