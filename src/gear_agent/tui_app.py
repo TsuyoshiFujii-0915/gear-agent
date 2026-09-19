@@ -19,6 +19,7 @@ from textual.widgets import Input, RichLog, Rule, Static
 
 from gear_agent.agent.events import (
     AgentLoopEvent,
+    ContextBudgetEvaluated,
     ModelReasoningSummaryDelta,
     ModelRequestStarted,
     ModelTextDelta,
@@ -387,6 +388,9 @@ class GearApp(App[None]):
     def _apply_progress_events(self, events: tuple[AgentLoopEvent, ...]) -> None:
         chat = self.query_one("#chat", RichLog)
         for event in events:
+            if isinstance(event, ContextBudgetEvaluated):
+                self._require_current_session(event.session_id)
+                continue
             if isinstance(event, ModelRequestStarted):
                 self._require_current_session(event.session_id)
                 self._reset_live_progress(event.iteration)

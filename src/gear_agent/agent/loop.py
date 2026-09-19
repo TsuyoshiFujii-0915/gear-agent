@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
+from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.events import (
     AgentLoopEvent,
     AgentLoopEventSink,
+    ContextBudgetEvaluated,
     ModelReasoningSummaryDelta,
     ModelRequestStarted,
     ModelTextDelta,
@@ -13,6 +16,10 @@ from gear_agent.agent.events import (
     ToolUseStarted,
 )
 from gear_agent.errors import GearError, gear_error
+from gear_agent.context_budget import (
+    ByteTokenEstimator, ContextBudgetConfig, ContextBudgetManager, ContextRequest,
+    DISABLED_CONTEXT_BUDGET, context_budget_error,
+)
 from gear_agent.model.adapter import ModelAdapter
 from gear_agent.model.events import (
     ModelFunctionCallArgumentsDelta,
@@ -71,13 +78,28 @@ class AgentLoop:
         store: ContextStore,
         event_sink: AgentLoopEventSink,
         repository_context: RepositoryContext,
+        context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET,
     ) -> None:
+        """Binds runtime services and the effective context policy.
+
+        Args:
+            adapter: Configured model adapter.
+            tools: Enabled tools.
+            store: Session audit store.
+            event_sink: Progress and diagnostic consumer.
+            repository_context: Current workspace instruction loader.
+            context_budget: Defaults to disabled for existing embedding callers,
+                matching the documented legacy configuration behavior.
+        """
         self._adapter = adapter
         self._replay_policy = adapter.replay_policy
         self._registry = ToolRegistry(tools)
         self._store = store
         self._event_sink = event_sink
         self._repository_context = repository_context
+        self._context_budget = context_budget
+        self._budget_manager = ContextBudgetManager(context_budget, ByteTokenEstimator())
+        self._compaction = CompactionService(adapter)
 
     def run_turn(
         self,
@@ -113,29 +135,35 @@ class AgentLoop:
             user_text,
         )
         input_items = model_input.items
-        self._publish_replay_diagnostic(session_id, model_input.diagnostic)
+        history_item_count = len(input_items) - 1
         self._store.append(session_id, "user_input", {"text": user_text})
         tools = self._registry.schemas()
         finalization_retry_used = False
-        pending_replay_diagnostic: ReasoningReplayDiagnostic | None = None
+        pending_replay_diagnostic: ReasoningReplayDiagnostic | None = model_input.diagnostic
 
         for iteration in range(1, max_iterations + 1):
             instructions = self._repository_context.instructions(
                 AGENT_INSTRUCTIONS, self._store.load(session_id),
             )
-            if pending_replay_diagnostic is not None:
-                self._publish_replay_diagnostic(
-                    session_id,
-                    pending_replay_diagnostic,
+            request = ContextRequest(input_items, tools, instructions, AGENT_INSTRUCTIONS, history_item_count)
+            if self._context_budget.auto_compaction:
+                request, pending_replay_diagnostic = self._budgeted_request(
+                    request, pending_replay_diagnostic,
+                    session_id, iteration, user_text, finalization_retry_used,
+                    timeout_seconds, stream_idle_timeout_seconds,
                 )
+                input_items = cast(list[object], request.input_value)
+                history_item_count = request.history_item_count
+            if pending_replay_diagnostic is not None:
+                self._publish_replay_diagnostic(session_id, pending_replay_diagnostic)
                 pending_replay_diagnostic = None
             self._event_sink.publish(
                 ModelRequestStarted(session_id=session_id, iteration=iteration)
             )
             response = self._adapter.create_response(
-                input_items,
-                tools,
-                instructions,
+                request.input_value,
+                request.tools,
+                request.instructions,
                 timeout_seconds,
                 stream_idle_timeout_seconds,
                 _AgentModelProgressSink(
@@ -233,6 +261,55 @@ class AgentLoop:
             True,
             {"max_iterations": max_iterations},
         )
+
+    def _budgeted_request(
+        self,
+        request: ContextRequest,
+        replay_diagnostic: ReasoningReplayDiagnostic | None,
+        session_id: str,
+        iteration: int,
+        user_text: str,
+        finalization_retry_used: bool,
+        timeout_seconds: int,
+        stream_idle_timeout_seconds: int | None,
+    ) -> tuple[ContextRequest, ReasoningReplayDiagnostic | None]:
+        diagnostic = self._budget_manager.evaluate(request)
+        triggered = not diagnostic.fits
+        self._event_sink.publish(ContextBudgetEvaluated(
+            session_id, iteration, 'before', diagnostic, triggered, False,
+        ))
+        if not triggered:
+            return request, replay_diagnostic
+
+        compaction_request = self._compaction.prepare_request(self._store.load(session_id))
+        compaction_diagnostic = self._budget_manager.evaluate_compaction(compaction_request)
+        self._event_sink.publish(ContextBudgetEvaluated(
+            session_id, iteration, 'compaction', compaction_diagnostic, True, not compaction_diagnostic.fits,
+        ))
+        if not compaction_diagnostic.fits:
+            raise context_budget_error(compaction_diagnostic, 'compaction')
+        self._compaction.compact_prepared(
+            session_id, self._store, compaction_request, timeout_seconds,
+            stream_idle_timeout_seconds, 'automatic',
+        )
+
+        events = self._store.load(session_id)
+        rebuilt = self._adapter.prepare_history(events, user_text)
+        history_item_count = len(rebuilt.items) - 1
+        if finalization_retry_used:
+            rebuilt.items.append(self._adapter.user_message_item(FINALIZATION_RETRY_INSTRUCTION))
+        request = ContextRequest(
+            rebuilt.items, request.tools,
+            self._repository_context.instructions(AGENT_INSTRUCTIONS, events),
+            AGENT_INSTRUCTIONS, history_item_count,
+        )
+        diagnostic = self._budget_manager.evaluate(request)
+        self._event_sink.publish(ContextBudgetEvaluated(
+            session_id, iteration, 'after', diagnostic, True, not diagnostic.fits,
+        ))
+        if not diagnostic.fits:
+            raise context_budget_error(diagnostic, 'after')
+        return request, rebuilt.diagnostic
 
     def _publish_replay_diagnostic(
         self,

@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import tomllib
 
 from gear_agent.errors import GearError, gear_error
+from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
 
 
 DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
@@ -53,6 +54,9 @@ network = "disabled"
 max_iterations = 8
 model_timeout_seconds = 120
 model_stream_idle_timeout_seconds = 60
+
+[context_budget]
+auto_compaction = false
 """
 
 
@@ -186,6 +190,7 @@ class AppConfig:
         tool: Model-callable tool configuration.
         web_search: Tavily web search configuration when enabled.
         web_fetch: Tavily web fetch configuration when enabled.
+        context_budget: Explicit context policy; absent legacy configuration disables it.
     """
 
     model: ModelConfig
@@ -193,6 +198,7 @@ class AppConfig:
     tool: ToolConfig
     web_search: WebSearchConfig | None
     web_fetch: WebFetchConfig | None
+    context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET
 
 
 def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
@@ -290,7 +296,34 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
         tool,
         web_search,
         web_fetch,
+        _load_context_budget(raw_data),
     )
+
+
+def _load_context_budget(raw_data: dict[str, object]) -> ContextBudgetConfig:
+    if 'context_budget' not in raw_data:
+        return DISABLED_CONTEXT_BUDGET
+    table = _required_table(raw_data, 'context_budget')
+    _reject_unknown_keys(table, 'context_budget', {
+        'auto_compaction', 'context_window_tokens', 'reserved_tokens', 'max_input_tokens',
+    })
+    automatic = _required_bool(table, 'auto_compaction', 'context_budget')
+    window = None
+    if automatic or 'context_window_tokens' in table:
+        window = _required_positive_int(table, 'context_window_tokens', 'context_budget')
+    reserved = 0
+    if automatic or 'reserved_tokens' in table:
+        value = table.get('reserved_tokens')
+        if type(value) is not int or value < 0:
+            raise gear_error(
+                'config_value_invalid', 'context_budget.reserved_tokens must be an explicit nonnegative integer.',
+                'config', True, {'table': 'context_budget', 'key': 'reserved_tokens'},
+            )
+        reserved = value
+    maximum = None
+    if 'max_input_tokens' in table:
+        maximum = _required_positive_int(table, 'max_input_tokens', 'context_budget')
+    return ContextBudgetConfig(automatic, window, reserved, maximum)
 
 
 def discover_config_path(start_dir: Path, home_dir: Path) -> Path:
