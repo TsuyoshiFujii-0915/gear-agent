@@ -149,6 +149,33 @@ fingerprints are calculated after sanitization, never from credential material.
 Recognized secrets in task or final text cause an explicit artifact error instead
 of silently altering text that promises exact preservation.
 
+Protocol objects with `type: function_call` are projected by decoding their
+`arguments` as a JSON object exactly once, redacting its fields, and serializing
+it back into the argument string. Safe argument strings retain their original
+whitespace and key order. Canonical session storage and actual model/tool inputs
+are never changed. Already-decoded `tool_call.payload.arguments` and
+`tool_result.payload.result` are data, not additional protocol objects. Strings
+inside arguments (including file content) receive text redaction; they are not
+recursively JSON-decoded. Known secrets are matched in raw/URL-encoded form and
+one JSON string-escaping layer of each form (ASCII and UTF-8 spellings), covering
+quotes, backslashes, control characters and non-ASCII characters. The outer
+protocol string is decoded before these text rules are applied.
+
+Each protocol argument string is limited to 1 MiB of UTF-8, and the projection
+has a maximum value depth of 64, measured from the artifact object's root and
+including decoded arguments. Invalid JSON, non-object arguments, duplicate
+object keys, invalid UTF-8 and non-JSON numeric constants are explicit
+`artifact_json_invalid` failures. Size/depth excess is an
+`artifact_json_limit_exceeded` failure. Repeatedly encoded arbitrary strings are
+not decoded. A rejected projection writes no unsafe event copy and cannot
+publish a terminal success manifest; the CLI reports the artifact failure with
+exit 1, even if the original task also failed. Its canonical session remains
+available for debugging. Error messages do not echo rejected input.
+
+Task and final text are checked with the same known-secret text rules. A match
+raises `artifact_sensitive_text`; otherwise the original text is preserved
+verbatim, without JSON normalization.
+
 The session copy and Git text artifacts are redacted. Original canonical sessions
 are not rewritten. `events.jsonl` may therefore differ from the original session
 only through privacy filtering. Opaque provider `encrypted_content` in canonical
