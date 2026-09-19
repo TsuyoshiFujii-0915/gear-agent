@@ -4,11 +4,12 @@ from argparse import ArgumentParser, Namespace
 from typing import Mapping
 from pathlib import Path
 from uuid import uuid4
+import json
 import os
 import sys
 
 from gear_agent.agent.compaction import CompactionService
-from gear_agent.agent.events import AgentLoopEventSink
+from gear_agent.agent.events import AgentLoopEventSink, SilentAgentLoopEventSink
 from gear_agent.config import (
     RuntimeConfig,
     discover_config_path,
@@ -16,9 +17,9 @@ from gear_agent.config import (
     load_config,
 )
 from gear_agent.errors import GearError
+from gear_agent.headless import read_task_prompt, run_task, validate_headless_runtime
 from gear_agent.runtime import AgentRuntime, build_agent_runtime
 from gear_agent.store.sessions import JsonlSessionDiscovery
-from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
 
 
 def main() -> None:
@@ -41,6 +42,8 @@ def run_cli(argv: list[str], environment: Mapping[str, str]) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "run":
+        return _run_headless(args, environment)
     try:
         if args.command == "init":
             _run_init(args, environment)
@@ -95,6 +98,12 @@ def _build_parser() -> ArgumentParser:
         action="store_true",
         help="Resume the most recently updated session.",
     )
+    run_parser = subparsers.add_parser(
+        "run", help="Execute one task without the TUI; global options precede run.",
+    )
+    task_input = run_parser.add_mutually_exclusive_group(required=True)
+    task_input.add_argument("--prompt", help="Inline task prompt.")
+    task_input.add_argument("--prompt-file", type=Path, help="UTF-8 task prompt file.")
     return parser
 
 
@@ -110,6 +119,8 @@ def _prepare_runtime(
 
 
 def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
+    from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
+
     event_sink = TextualAgentLoopEventSink()
     agent = _prepare_runtime(args, environment, event_sink)
     session_id = _session_id_from_args(args, agent.runtime.session_dir)
@@ -126,6 +137,54 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
     )
     event_sink.bind(app)
     app.run()
+
+
+def _run_headless(args: Namespace, environment: Mapping[str, str]) -> int:
+    secrets: tuple[str, ...] = ()
+    try:
+        prompt = read_task_prompt(args.prompt, args.prompt_file)
+        agent = _prepare_runtime(args, environment, SilentAgentLoopEventSink())
+        secrets = tuple(
+            config.api_key for config in
+            (agent.config.model, agent.config.web_search, agent.config.web_fetch)
+            if config is not None and config.api_key
+        )
+        validate_headless_runtime(agent)
+        session_id = str(uuid4())
+        print(f"session_id={session_id}", file=sys.stderr, flush=True)
+        try:
+            result = run_task(agent, session_id, prompt)
+        except GearError as exc:
+            _print_headless_error(exc, secrets)
+            return 3
+        print(result.turn.final_text)
+    except GearError as exc:
+        _print_headless_error(exc, secrets)
+        return 1
+    except OSError as exc:
+        error = GearError(
+            "runtime_io_failed", f"Local runtime I/O failed: {exc.strerror} ({exc.filename}).",
+            "headless", True, {"errno": exc.errno},
+        )
+        _print_headless_error(error, secrets)
+        return 1
+    except UnicodeError:
+        error = GearError(
+            "runtime_encoding_invalid", "Runtime input is not valid UTF-8 text.",
+            "headless", True, {},
+        )
+        _print_headless_error(error, secrets)
+        return 1
+    return 0
+
+
+def _print_headless_error(error: GearError, secrets: tuple[str, ...]) -> None:
+    # Details can contain remote response bodies, URLs or tool arguments.
+    message = error.message
+    for secret in sorted(secrets, key=len, reverse=True):
+        message = message.replace(secret, "[REDACTED]")
+    print(json.dumps({"error": {"type": error.error_type, "origin": error.origin,
+                               "message": message}}, ensure_ascii=False), file=sys.stderr)
 
 
 def _session_id_from_args(args: Namespace, session_dir: Path) -> str:

@@ -3,7 +3,7 @@
 Gear Agent は、Responses API 互換エンドポイントを使う最小構成の学習用コーディングエージェントです。
 Codex の中核動作を理解しやすい Python コードとして表現することを目的にしています。
 
-現在の実装は、対話型 TUI、モデル呼び出し、ツール実行、JSONL 形式のセッション保存、手動・自動の履歴コンパクションを備えています。
+現在の実装は、対話型 TUI、非対話の単一タスク実行、モデル呼び出し、ツール実行、JSONL 形式のセッション保存、手動・自動の履歴コンパクションを備えています。
 
 ## 特徴
 
@@ -323,6 +323,58 @@ uv run gear --workdir ../target-project --network enabled
 uv run gear --max-iterations 4 --model-timeout-seconds 30
 uv run gear --session-dir ../sessions resume --latest
 ```
+
+### 非対話で1タスクを実行する
+
+`run` は新規セッションで1回のユーザーターンを実行します。モデルのツール呼び出しは、
+最終回答またはエラーになるまで通常の `AgentLoop` 内で続きます。
+
+```bash
+uv run gear run --prompt "Fix the failing test"
+uv run gear run --prompt-file task.md
+uv run gear --workdir ../target-project --max-iterations 12 run --prompt-file task.md
+uv run gear --config custom.toml --session-dir ../sessions --model-timeout-seconds 60 run --prompt "Explain this project"
+```
+
+`--prompt` と `--prompt-file` はどちらか一方が必須です。ファイルはUTF-8として読み、
+空白だけのタスクは拒否します。設定・実行時オプションは従来どおり `run` の前に置きます。
+設定探索、相対パスの基準（起動ディレクトリ）、workspace境界、Docker shellとnetwork設定、
+有効なツール、モデルadapter、AGENTS.md、context budgetと自動compactionはTUIと共通です。
+`model.stream = true` も利用でき、Textualや対話イベントループは起動しません。
+
+出力の契約は次のとおりです。
+
+- 成功時のstdout: 確定した最終回答を1回だけ出力し、改行を1つ付加します。
+- stderr: 実行前に `session_id=<UUID>` を1行出力します。失敗時はさらに
+  `{"error":{"type":"...","origin":"...","message":"..."}}` のJSON診断を出します。
+- 進捗、推論、streamの途中テキストは出力しません。進捗は常に無効なのでquiet指定は不要です。
+- 失敗時のstdoutは空です。部分実行後にタスク全体を自動再試行しません。
+
+| 終了コード | 意味 |
+| --- | --- |
+| 0 | 最終回答を得て正常終了 |
+| 1 | 設定、promptファイル、実行環境、ローカルI/Oのエラー |
+| 2 | CLI引数のエラー（入力の未指定・重複など） |
+| 3 | 実行中のモデル、agent、tool、repository context、context budgetの構造化エラー |
+
+回復可能なtoolエラーは通常どおりモデルに返し、訂正して完了できれば成功です。
+中断時は通常のプロセス中断動作に従います。
+
+```bash
+uv run gear run --prompt-file task.md > answer.txt 2> run.log
+```
+
+履歴は通常の `session_dir/<UUID>.jsonl` に保存され、`gear resume <UUID>` でTUIから
+再開できます。診断は認証情報を伏せ、任意のレスポンス本文を含むerror detailsは出しません。
+回答とセッション内のタスク・モデル・tool本文には、通常の保存・出力ルールが適用されます。
+
+Pythonからは `gear_agent.headless.run_task` の `RunResult` と `RunSpec` で、
+モデル名・credentialを除いたendpoint fingerprint、adapterとcapabilities、workspace、
+tool設定、runtime制限、context budget、prompt source、session IDを参照できます。
+API keyと生のendpoint URLはこのmetadataに含めません。ベンチマーク用artifactファイルの
+生成やheadless resumeはこのコマンドの対象外です。
+
+### 対話中の操作
 
 Shell tool の Docker image はコード側で `python:3.11-slim` に固定しています。
 
