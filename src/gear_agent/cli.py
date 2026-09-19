@@ -8,21 +8,16 @@ import os
 import sys
 
 from gear_agent.agent.compaction import CompactionService
-from gear_agent.agent.loop import AgentLoop
+from gear_agent.agent.events import AgentLoopEventSink
 from gear_agent.config import (
-    DEFAULT_DOCKER_IMAGE,
     RuntimeConfig,
     discover_config_path,
     initialize_config,
     load_config,
 )
 from gear_agent.errors import GearError
-from gear_agent.model.factory import build_model_adapter
-from gear_agent.repository import RepositoryContext
-from gear_agent.store.jsonl import JsonlContextStore
+from gear_agent.runtime import AgentRuntime, build_agent_runtime
 from gear_agent.store.sessions import JsonlSessionDiscovery
-from gear_agent.tools.configured import build_configured_tools
-from gear_agent.tools.runtimes import DockerShellRuntime
 from gear_agent.tui_app import GearApp, TextualAgentLoopEventSink
 
 
@@ -103,43 +98,31 @@ def _build_parser() -> ArgumentParser:
     return parser
 
 
-def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
+def _prepare_runtime(
+    args: Namespace, environment: Mapping[str, str], event_sink: AgentLoopEventSink,
+) -> AgentRuntime:
     config_path = args.config
     if config_path is None:
         config_path = discover_config_path(Path.cwd(), _home_dir(environment))
     config = load_config(config_path, environment)
     runtime = _runtime_from_args(config.runtime, args)
-    workspace = runtime.workdir.resolve()
-    store = JsonlContextStore(runtime.session_dir)
-    session_id = _session_id_from_args(args, runtime.session_dir)
-    shell_runtime = DockerShellRuntime(workspace, DEFAULT_DOCKER_IMAGE, runtime.network_enabled)
-    tools = build_configured_tools(
-        config.tool,
-        config.web_search,
-        config.web_fetch,
-        workspace,
-        shell_runtime,
-    )
+    return build_agent_runtime(config, runtime, event_sink)
+
+
+def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
     event_sink = TextualAgentLoopEventSink()
-    adapter = build_model_adapter(config.model)
-    loop = AgentLoop(
-        adapter,
-        tools,
-        store,
-        event_sink,
-        RepositoryContext(workspace),
-        context_budget=config.context_budget,
-    )
-    compaction = CompactionService(adapter)
+    agent = _prepare_runtime(args, environment, event_sink)
+    session_id = _session_id_from_args(args, agent.runtime.session_dir)
+    compaction = CompactionService(agent.adapter)
     app = GearApp(
-        model=config.model.model,
+        model=agent.config.model.model,
         session_id=session_id,
-        workspace=workspace,
-        agent_loop=loop,
+        workspace=agent.workspace,
+        agent_loop=agent.loop,
         compaction=compaction,
-        store=store,
-        runtime=runtime,
-        model_config=config.model,
+        store=agent.store,
+        runtime=agent.runtime,
+        model_config=agent.config.model,
     )
     event_sink.bind(app)
     app.run()
