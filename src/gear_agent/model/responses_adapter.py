@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from gear_agent.agent.history import build_model_input
-from gear_agent.model.types import FunctionCall, ModelHistory
+from gear_agent.model.types import FunctionCall, ModelHistory, ModelUsage
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import gear_error
 from gear_agent.model.adapter import ModelCapabilities
@@ -25,6 +25,24 @@ class ResponsesModelResponse:
 
     response: dict[str, Any]
     policy: ReasoningReplayPolicy
+
+    @property
+    def usage(self) -> ModelUsage:
+        """Validates reported counts without inferring missing categories."""
+        usage = self.response.get('usage')
+        if usage is None:
+            return ModelUsage(None, None, None)
+        if not isinstance(usage, dict):
+            raise gear_error('response_usage_invalid', 'Response usage must be an object.',
+                             'responses_adapter', True, {})
+        counts: list[int | None] = []
+        for name in ('input_tokens', 'output_tokens', 'total_tokens'):
+            value = usage.get(name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise gear_error('response_usage_invalid', f'Response usage.{name} must be nonnegative.',
+                                 'responses_adapter', True, {'field': name})
+            counts.append(value)
+        return ModelUsage(*counts)
 
     @property
     def persisted_payload(self) -> dict[str, Any]:

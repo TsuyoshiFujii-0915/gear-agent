@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 import os
@@ -42,6 +43,7 @@ class RepositoryContext:
         Raises:
             GearError: If the workspace cannot be resolved to a directory.
         """
+        self.instruction_metadata: list[dict[str, str]] = []
         try:
             self._workspace = workspace.resolve(strict=True)
             if not stat.S_ISDIR(self._workspace.stat().st_mode):
@@ -106,6 +108,11 @@ class RepositoryContext:
             GearError: If applicable context cannot be constructed safely.
         """
         records = self._discover_physical(self._activity_directories(events))
+        self.instruction_metadata = [
+            {'path': record.path.as_posix(), 'scope': record.scope.as_posix(),
+             'sha256': sha256(record.content.encode('utf-8')).hexdigest()}
+            for record in records
+        ]
         if not records:
             return base
         blocks = [

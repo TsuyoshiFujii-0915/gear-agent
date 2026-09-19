@@ -10,6 +10,7 @@ from gear_agent.model.adapter import ModelAdapter
 from gear_agent.model.events import SilentModelProgressEventSink
 from gear_agent.model.replay import strip_opaque_reasoning_from_event
 from gear_agent.store.base import ContextStore
+from gear_agent.observation import RunObserver, record_model_usage, request_model
 
 
 COMPACTION_INSTRUCTIONS = "Summarize effective Gear Agent session context for future continuation."
@@ -18,8 +19,10 @@ COMPACTION_INSTRUCTIONS = "Summarize effective Gear Agent session context for fu
 class CompactionService:
     """Creates explicit summaries for stored session history."""
 
-    def __init__(self, adapter: ModelAdapter) -> None:
+    def __init__(self, adapter: ModelAdapter, observer: RunObserver | None = None) -> None:
+        """Binds services; existing interactive callers omit run-only observation."""
         self._adapter = adapter
+        self._observer = observer
 
     def compact(
         self,
@@ -85,14 +88,11 @@ class CompactionService:
         Raises:
             GearError: If the model fails or returns no summary.
         """
-        response = self._adapter.create_response(
-            request.input_value,
-            request.tools,
-            request.instructions,
-            timeout_seconds,
-            stream_idle_timeout_seconds,
-            SilentModelProgressEventSink(),
+        response = request_model(
+            self._adapter, request, timeout_seconds, stream_idle_timeout_seconds,
+            SilentModelProgressEventSink(), self._observer, 'compaction',
         )
+        record_model_usage(response, self._observer)
         summary = response.text
         if summary.strip() == "":
             raise gear_error(
