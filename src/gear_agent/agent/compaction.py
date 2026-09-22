@@ -88,6 +88,27 @@ class CompactionService:
         Raises:
             GearError: If the model fails or returns no summary.
         """
+        summary = self.summarize_prepared(request, timeout_seconds, stream_idle_timeout_seconds)
+        payload = {'text': summary}
+        if trigger == 'automatic':
+            payload['trigger'] = trigger
+        store.append(session_id, "compaction_summary", payload)
+        return summary
+
+    def summarize_prepared(
+        self, request: ContextRequest, timeout_seconds: int,
+        stream_idle_timeout_seconds: int | None,
+    ) -> str:
+        """Executes a textual request without committing a checkpoint.
+
+        Args:
+            request: Prepared, sanitized summary request.
+            timeout_seconds: Model request timeout.
+            stream_idle_timeout_seconds: Streaming idle timeout.
+
+        Returns:
+            Nonempty summary text.
+        """
         response = request_model(
             self._adapter, request, timeout_seconds, stream_idle_timeout_seconds,
             SilentModelProgressEventSink(), self._observer, 'compaction',
@@ -102,10 +123,6 @@ class CompactionService:
                 True,
                 {},
             )
-        payload = {'text': summary}
-        if trigger == 'automatic':
-            payload['trigger'] = trigger
-        store.append(session_id, "compaction_summary", payload)
         return summary
 
 
