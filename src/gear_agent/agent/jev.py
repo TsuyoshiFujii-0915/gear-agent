@@ -10,7 +10,9 @@ from typing import Any, Protocol
 from typesafe_sdk import Noul, RetryPolicy, TypeSafeClient, TypeSafeError
 
 from gear_agent.agent.compaction_strategy import CompactionCandidate
-from gear_agent.agent.history import select_effective_events, validate_tool_pairs
+from gear_agent.agent.history import (
+    assistant_output_text, select_effective_events, standalone_assistant_text, validate_tool_pairs,
+)
 from gear_agent.compaction_config import JevConfig
 from gear_agent.context_budget import ByteTokenEstimator
 from gear_agent.errors import GearError
@@ -248,12 +250,21 @@ def _eligible_interactions(events: list[dict[str, Any]], recent_turns: int) -> t
 
 def _build_state(events: list[dict[str, Any]]) -> str:
     state: list[dict[str, Any]] = []
+    preceding_response_text: str | None = None
     for event in events:
         kind, payload = event['kind'], event['payload']
-        if kind in ('user_input', 'assistant_message', 'compaction_summary', 'continuation_instruction'):
+        if kind in ('user_input', 'compaction_summary', 'continuation_instruction'):
             state.append({'kind': kind, 'text': payload['text']})
+            preceding_response_text = None
+        elif kind == 'assistant_message':
+            assistant_text = standalone_assistant_text(payload, preceding_response_text)
+            if assistant_text is not None:
+                state.append({'kind': kind, 'text': assistant_text})
+            preceding_response_text = None
         elif kind == 'model_response':
-            for item in read_model_response_event(payload).response['output']:
+            output = read_model_response_event(payload).response['output']
+            preceding_response_text = assistant_output_text(output)
+            for item in output:
                 if item['type'] == 'function_call':
                     arguments = item['arguments']
                     state.append({'kind': 'call', 'call_id': item['call_id'], 'name': item['name'],
