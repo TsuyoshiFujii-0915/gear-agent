@@ -47,13 +47,16 @@ def history() -> list[dict[str, Any]]:
               event('model_response', model_response_event_payload({'output': output}, reasoning_replay_policy(MODEL)))]
     for call in calls:
         events.append(event('tool_call', {'call_id': call['call_id'], 'name': call['name'], 'arguments': {}}))
-        result = {'error': {'message': 'recoverable failure'}} if call['call_id'] == 'error' else {'content': 'RESULT-BODY-' * 600}
+        result = {'error': {'message': 'recoverable failure'}} if call['call_id'] == 'error' else {
+            'content': 'RESULT-BODY-' * 600, 'resolved_scope_paths': ['.'],
+        }
         events.append(event('tool_result', {'call_id': call['call_id'], 'name': call['name'], 'result': result}))
     events.extend([event('assistant_message', {'text': 'checking'}),
                    event('user_input', {'text': 'recent task'}),
                    event('model_response', {'output': [{'type': 'function_call', 'call_id': 'recent',
                                                         'name': 'file_read', 'arguments': '{}'}]}),
-                   event('tool_result', {'call_id': 'recent', 'result': {'content': 'recent body'}}),
+                   event('tool_result', {'call_id': 'recent', 'name': 'file_read',
+                                         'result': {'content': 'recent body', 'resolved_scope_paths': ['.']}}),
                    event('assistant_message', {'text': 'recent done'}),
                    event('user_input', {'text': 'current task'})])
     return events
