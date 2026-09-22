@@ -31,6 +31,8 @@ class ArtifactPrivacy:
 
     def __init__(self, config: AppConfig, environment: Mapping[str, str]) -> None:
         values = [config.model.api_key]
+        if config.compaction.jev is not None:
+            values.append(config.compaction.jev.api_key)
         if config.web_search is not None:
             values.append(config.web_search.api_key)
         if config.web_fetch is not None:

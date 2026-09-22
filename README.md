@@ -555,3 +555,78 @@ uv run pytest -q
 - `docs/PLAN.md`: プロジェクトの目的、範囲、初期アーキテクチャ
 - `docs/decisions/`: 採用済みの設計判断
 - OpenAI Responses API: https://platform.openai.com/docs/api-reference/responses/create
+
+### 実験的な Jev 選択圧縮
+
+自動圧縮の既定は従来どおり `summary`（テキスト要約）です。`jev` を選ぶと、
+TypeSafe の Jev が過去の完了済みツール呼び出しについて「呼び出しを覚えておく必要」
+と「結果全文を保持する必要」を別々の Noul 質問で判定します。結果が必要なら両方を
+そのまま保持し、呼び出しだけ必要なら結果を短いプレビューに置き換え、両方不要なら
+呼び出しと結果を対で除去します。残る内容は原文でも、選択と切り詰めは**情報を失う処理**です。
+
+```toml
+# 既存の [context_budget] セクションで自動圧縮とモデル容量を設定してください。
+[compaction]
+strategy = "jev"
+fallback = "summary" # 明示的に指定。省略時は "none"（失敗を通知）
+
+[compaction.jev]
+model = "jev-1.13.0" # バージョン固定。latest / preview は使用不可
+api_key_env = "TYPESAFE_API_KEY"
+timeout_seconds = 10
+keep_threshold = 0.2
+preserve_recent_turns = 1
+truncate_chars = 160
+max_state_tokens = 25000
+max_request_tokens = 30000
+batch_size = 32 # 1バッチの呼び出し数。各呼び出しに2質問
+```
+
+```sh
+export TYPESAFE_API_KEY='your-typesafe-api-key'
+```
+
+`model` と `api_key_env` は必須です。それ以外の Jev 設定は上記が既定値です。
+低めの `keep_threshold` は不確実な履歴を残すための保守的な方針です。
+`preserve_recent_turns` は現在のターンに加えて保護する直前のターン数です。
+`strategy = "summary"` に戻す場合は `[compaction.jev]` を削除し、`fallback = "none"`
+にしてください。`[compaction]` 全体を省略した旧設定も引き続き動作します。
+手動の `/compact` は従来どおり明示的なテキスト要約を行います。
+
+Jev へは、現在の依頼を含むユーザー・アシスタントの文章、以前の要約、ツール名、
+最大1000文字の引数、成功/エラーの区分、結果の文字数を送信します。
+**ツール結果本文や推論項目（暗号化された推論を含む）は送信しません。**
+会話や引数に含まれるソースコード・パス・機密情報は外部サービスへ送られ得るため、
+このデータ共有を許容するセッションで有効にしてください。認証キーは環境変数から読み、
+チェックポイントや診断へ書き込みません。実装は公式 Python SDK を使用します。
+
+初版の候補は `file_read` / `glob` / `grep` / `web_search` / `web_fetch` の完了済み履歴です。
+現在のターンと直近のターン、未完了・失敗したターン、エラー結果、書き込み・パッチ・
+シェル・未知のツールは保護します。ユーザー発言や通常のアシスタント発言は削除候補にしません。
+現在の推論・ツール実行チェーンと最終回答を促す再試行指示はそのまま保持します。
+
+元の JSONL は追記専用です。選別結果は `compaction_selective` チェックポイントに保存し、
+再開・再圧縮は最新の有効な履歴を使います。削除済みの呼び出しは復活せず、
+現在のユーザー入力も重複しません。暗号化推論には従来のエンドポイント・モデルの
+再送スコープを適用します。保存前に履歴の対応関係と再生の一致を検証し、
+ツール定義・リポジトリ指示・現在のターンを含む実際のリクエストを再計測します。
+
+Jev の state とバッチ全体には主モデルと独立した上限を適用します。
+主モデルと同じ保守的なUTF-8バイトベースの推定を使うため、実トークン数より早く
+上限に達する場合があります。state上限25000、リクエスト上限30000は増やせません。
+文脈を暗黙に削って上限に合わせる処理やSDKの自動リトライは行いません。
+タイムアウト、不正な応答、上限超過、候補なし、検証失敗、削減不足では
+選別チェックポイントを保存しません。`fallback = "summary"` の場合だけ、元の有効履歴から
+従来の要約を一度試みます。要約用リクエストや要約後のリクエストも予算に入らなければ、
+従来の `context_budget_exceeded` エラーになります。
+
+headless 実行の `events.jsonl` の `compaction_strategy` および `metrics.json` の
+`context.strategies` で、方式、Jevバージョン、候補/保護件数、保持/切り詰め/除去件数、
+圧縮前後の推定入力、削減率、バッチ数、Jev所要時間、報告された利用量、
+フォールバック理由・結果を確認できます。会話・ツール本文やプロバイダーのエラー本文は
+診断に含めず、Jev利用量は主モデル利用量と分けて記録します。
+
+設計は [ADR-0022](docs/decisions/0022-select-semantic-history-with-append-only-checkpoints.md)、
+外部仕様は [TypeSafe Python SDK](https://docs.typesafe.ai/sdk/python)、
+[モデル仕様](https://docs.typesafe.ai/models)、参考実装は
+[fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction) を参照してください。
