@@ -98,21 +98,13 @@ def build_model_history(
             continue
         if kind == "assistant_message":
             payload = _required_payload(event, kind)
-            assistant_text = _required_string(payload, "text", "assistant_message")
-            if preceding_response_assistant_text is None:
+            assistant_text = standalone_assistant_text(payload, preceding_response_assistant_text)
+            if assistant_text is not None:
                 input_items.append(
                     {
                         "role": "assistant",
                         "content": assistant_text,
                     }
-                )
-            elif assistant_text != preceding_response_assistant_text:
-                raise _shape_error(
-                    (
-                        "assistant_message.text does not match the preceding "
-                        "model_response message output."
-                    ),
-                    "assistant_message",
                 )
             preceding_response_assistant_text = None
             continue
@@ -129,7 +121,7 @@ def build_model_history(
             replay_diagnostic = replay_diagnostic.combine(
                 replayed_output.diagnostic
             )
-            preceding_response_assistant_text = _assistant_output_text(output_items)
+            preceding_response_assistant_text = assistant_output_text(output_items)
             for item in output_items:
                 item_type = _required_string(item, "type", "model_response.output")
                 if item_type == "function_call":
@@ -240,7 +232,48 @@ def _response_output_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
-def _assistant_output_text(items: list[dict[str, Any]]) -> str | None:
+def standalone_assistant_text(
+    payload: dict[str, Any], preceding_response_text: str | None,
+) -> str | None:
+    """Returns standalone assistant text or omits its corresponding mirror.
+
+    Args:
+        payload: Canonical assistant_message payload.
+        preceding_response_text: Combined text from the preceding model response,
+            or None when no response message is awaiting its mirror.
+
+    Returns:
+        Standalone text, or None for a matching response mirror.
+
+    Raises:
+        GearError: If the text is malformed or differs from its response.
+    """
+    assistant_text = _required_string(payload, "text", "assistant_message")
+    if preceding_response_text is None:
+        return assistant_text
+    if assistant_text != preceding_response_text:
+        raise _shape_error(
+            (
+                "assistant_message.text does not match the preceding "
+                "model_response message output."
+            ),
+            "assistant_message",
+        )
+    return None
+
+
+def assistant_output_text(items: list[dict[str, Any]]) -> str | None:
+    """Combines response message text using the canonical mirror semantics.
+
+    Args:
+        items: Model response output items, including multi-message responses.
+
+    Returns:
+        Concatenated output text, or None if the response contains no messages.
+
+    Raises:
+        GearError: If a response message has malformed content.
+    """
     message_found = False
     parts: list[str] = []
     for item in items:
