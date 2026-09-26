@@ -51,6 +51,6 @@ def build_agent_runtime(
     adapter = build_model_adapter(config.model)
     loop = AgentLoop(
         adapter, tools, store, event_sink, RepositoryContext(workspace),
-        context_budget=config.context_budget, observer=observer,
+        context_budget=config.context_budget, observer=observer, compaction_config=config.compaction,
     )
     return AgentRuntime(config, runtime, workspace, store, adapter, loop)

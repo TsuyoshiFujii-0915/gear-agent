@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from gear_agent.agent.compaction import CompactionService
+from gear_agent.agent.compaction_strategy import CompactionStrategy, SummaryCompactionStrategy
+from gear_agent.agent.history import build_model_history, select_effective_events
+from gear_agent.agent.jev import JevClient, JevCompactionStrategy
+from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION
 from gear_agent.agent.events import (
     AgentLoopEvent,
     AgentLoopEventSink,
@@ -81,6 +85,7 @@ class AgentLoop:
         repository_context: RepositoryContext,
         context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET,
         observer: RunObserver | None = None,
+        compaction_config: CompactionConfig = SUMMARY_COMPACTION,
     ) -> None:
         """Binds runtime services and the effective context policy.
 
@@ -93,6 +98,7 @@ class AgentLoop:
             context_budget: Defaults to disabled for existing embedding callers,
                 matching the documented legacy configuration behavior.
             observer: Omitted by existing TUI/embedding callers to disable run-only observations.
+            compaction_config: Defaults to summary for legacy embedding callers.
         """
         self._adapter = adapter
         self._replay_policy = adapter.replay_policy
@@ -104,6 +110,11 @@ class AgentLoop:
         self._budget_manager = ContextBudgetManager(context_budget, ByteTokenEstimator())
         self._observer = observer
         self._compaction = CompactionService(adapter, observer)
+        self._compaction_config = compaction_config
+        self._summary_strategy: CompactionStrategy = SummaryCompactionStrategy(self._compaction, self._budget_manager)
+        self._selective_strategy: CompactionStrategy | None = None
+        if compaction_config.jev is not None:
+            self._selective_strategy = JevCompactionStrategy(compaction_config.jev, JevClient(compaction_config.jev))
 
     def run_turn(
         self,
@@ -190,6 +201,8 @@ class AgentLoop:
                     return TurnResult(final_text=final_text, iterations=iteration)
                 if not finalization_retry_used and iteration < max_iterations:
                     finalization_retry_used = True
+                    if self._selective_strategy is not None:
+                        self._store.append(session_id, 'continuation_instruction', {'text': FINALIZATION_RETRY_INSTRUCTION})
                     input_items.extend(output_items)
                     input_items.append(
                         self._adapter.user_message_item(FINALIZATION_RETRY_INSTRUCTION)
@@ -293,6 +306,31 @@ class AgentLoop:
         if not triggered:
             return request, replay_diagnostic
 
+        if self._selective_strategy is not None:
+            return self._selective_budgeted_request(
+                request, replay_diagnostic, session_id, iteration, user_text,
+                finalization_retry_used, timeout_seconds, stream_idle_timeout_seconds,
+            )
+        before = diagnostic.total_estimated_request_tokens
+        metrics: dict[str, Any] = {'strategy': 'summary', 'estimated_input_before': before,
+                                  'estimated_input_after': None, 'reduction_ratio': None,
+                                  'outcome': 'failed'}
+        try:
+            result = self._summary_budgeted_request(
+                request, session_id, iteration, user_text, finalization_retry_used,
+                timeout_seconds, stream_idle_timeout_seconds,
+            )
+            after = self._budget_manager.evaluate(result[0]).total_estimated_request_tokens
+            metrics.update(estimated_input_after=after, reduction_ratio=1 - after / before, outcome='succeeded')
+            return result
+        finally:
+            self._observe_compaction(metrics)
+
+    def _summary_budgeted_request(
+        self, request: ContextRequest, session_id: str, iteration: int,
+        user_text: str, finalization_retry_used: bool, timeout_seconds: int,
+        stream_idle_timeout_seconds: int | None,
+    ) -> tuple[ContextRequest, ReasoningReplayDiagnostic | None]:
         compaction_request = self._compaction.prepare_request(self._store.load(session_id))
         compaction_diagnostic = self._budget_manager.evaluate_compaction(compaction_request)
         self._event_sink.publish(ContextBudgetEvaluated(
@@ -300,10 +338,10 @@ class AgentLoop:
         ))
         if not compaction_diagnostic.fits:
             raise context_budget_error(compaction_diagnostic, 'compaction')
-        self._compaction.compact_prepared(
-            session_id, self._store, compaction_request, timeout_seconds,
-            stream_idle_timeout_seconds, 'automatic',
+        candidate = self._summary_strategy.compact(
+            self._store.load(session_id), timeout_seconds, stream_idle_timeout_seconds,
         )
+        self._store.append(session_id, candidate.kind, candidate.payload)
 
         events = self._store.load(session_id)
         rebuilt = self._adapter.prepare_history(events, user_text)
@@ -322,6 +360,96 @@ class AgentLoop:
         if not diagnostic.fits:
             raise context_budget_error(diagnostic, 'after')
         return request, rebuilt.diagnostic
+
+    def _selective_budgeted_request(
+        self, request: ContextRequest, replay_diagnostic: ReasoningReplayDiagnostic | None,
+        session_id: str, iteration: int, user_text: str, finalization_retry_used: bool,
+        timeout_seconds: int, stream_idle_timeout_seconds: int | None,
+    ) -> tuple[ContextRequest, ReasoningReplayDiagnostic | None]:
+        if self._selective_strategy is None:
+            raise RuntimeError('Selective compaction strategy was not configured.')
+        before = self._budget_manager.evaluate(request).total_estimated_request_tokens
+        metrics: dict[str, Any] = {'strategy': 'jev', 'estimated_input_before': before,
+                                  'estimated_input_after': None, 'reduction_ratio': None,
+                                  'fallback_reason': None, 'fallback_outcome': 'not_needed'}
+        try:
+            candidate = self._selective_strategy.compact(
+                self._store.load(session_id), timeout_seconds, stream_idle_timeout_seconds,
+            )
+            metrics.update(candidate.metrics)
+            checkpoint = {'kind': candidate.kind, 'payload': candidate.payload}
+            selected = select_effective_events([checkpoint])
+            # Validate the complete replay, including assistant deduplication.
+            build_model_history([checkpoint], self._replay_policy)
+            current_index = next((i for i in range(len(selected) - 1, -1, -1)
+                                  if selected[i]['kind'] == 'user_input'), None)
+            if current_index is None or selected[current_index]['payload']['text'] != user_text:
+                raise gear_error('jev_current_turn_invalid', 'Selective history lost the current user boundary.',
+                                 'compaction', True, {})
+            rebuilt = self._adapter.prepare_history(selected[:current_index], user_text)
+            history_count = len(rebuilt.items) - 1
+            # Preserve exact in-memory tool outputs, reasoning and synthetic input.
+            active_items = cast(list[object], request.input_value)[request.history_item_count:]
+            rebuilt.items[history_count:] = active_items
+            candidate_request = ContextRequest(
+                rebuilt.items, request.tools,
+                self._repository_context.instructions(AGENT_INSTRUCTIONS, self._store.load(session_id)),
+                request.base_instructions, history_count,
+            )
+            # Snapshot active outputs exactly, bypassing legacy replay truncation.
+            active_outputs = {item['call_id']: item['output'] for item in active_items
+                              if isinstance(item, dict) and item.get('type') == 'function_call_output'}
+            for event in candidate.payload['events'][current_index:]:
+                if event['kind'] == 'tool_result':
+                    call_id = event['payload']['call_id']
+                    if call_id not in active_outputs:
+                        raise gear_error('jev_current_turn_invalid', 'Current tool result has no live replay item.',
+                                         'compaction', True, {})
+                    event['payload']['model_visible_output'] = active_outputs[call_id]
+            replayed = build_model_history([checkpoint], self._replay_policy)
+            if replayed.items != candidate_request.input_value:
+                raise gear_error('jev_replay_mismatch', 'Selective checkpoint differs from the candidate request.',
+                                 'compaction', True, {})
+            after = self._budget_manager.evaluate(candidate_request)
+            metrics['estimated_input_after'] = after.total_estimated_request_tokens
+            metrics['reduction_ratio'] = 1 - after.total_estimated_request_tokens / before
+            if not after.fits:
+                raise gear_error('jev_insufficient_reduction', 'Selective history still exceeds the context budget.',
+                                 'compaction', True, {})
+        except GearError as error:
+            if 'metrics' in error.details:
+                metrics.update(error.details['metrics'])
+            metrics['fallback_reason'] = error.error_type
+            if self._compaction_config.fallback != 'summary':
+                metrics['fallback_outcome'] = 'disabled'
+                self._observe_compaction(metrics)
+                raise
+            try:
+                result = self._summary_budgeted_request(
+                    request, session_id, iteration, user_text, finalization_retry_used,
+                    timeout_seconds, stream_idle_timeout_seconds,
+                )
+            except BaseException:
+                metrics['fallback_outcome'] = 'failed'
+                self._observe_compaction(metrics)
+                raise
+            metrics['fallback_outcome'] = 'succeeded'
+            metrics['estimated_input_after'] = self._budget_manager.evaluate(result[0]).total_estimated_request_tokens
+            metrics['reduction_ratio'] = 1 - metrics['estimated_input_after'] / before
+            self._observe_compaction(metrics)
+            return result
+        # No selective state is persisted until all replay and budget checks pass.
+        self._store.append(session_id, candidate.kind, candidate.payload)
+        self._event_sink.publish(ContextBudgetEvaluated(session_id, iteration, 'after', after, True, False))
+        self._observe_compaction(metrics)
+        diagnostic = rebuilt.diagnostic
+        if iteration > 1 and replay_diagnostic is not None:
+            diagnostic = diagnostic.combine(replay_diagnostic)
+        return candidate_request, diagnostic
+
+    def _observe_compaction(self, metrics: dict[str, Any]) -> None:
+        if self._observer is not None:
+            self._observer.record('compaction_strategy', metrics)
 
     def _publish_replay_diagnostic(
         self,

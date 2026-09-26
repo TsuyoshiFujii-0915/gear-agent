@@ -77,7 +77,7 @@ class EvalRunCollector:
         replay['dropped_encrypted_items'] = sum(replay[field] for field in replay_fields[1:])
         context = self._payloads('context_budget')
         estimates = [p['diagnostic']['total_estimated_request_tokens'] for p in context]
-        checkpoints = [e['payload'] for e in session_events if e['kind'] == 'compaction_summary']
+        checkpoints = [e['payload'] for e in session_events if e['kind'] in ('compaction_summary', 'compaction_selective')]
         iterations = self._payloads('iteration_completed')
         return privacy.serialize({
             'schema_version': 1,
@@ -90,7 +90,8 @@ class EvalRunCollector:
                       'duration_seconds': sum(c['duration_seconds'] for c in tool_calls),
                       'by_name': by_name, 'calls': tool_calls},
             'reasoning_replay': replay,
-            'context': {'automatic_compactions': sum(p.get('trigger') == 'automatic' for p in checkpoints),
+            'context': {'strategies': self._payloads('compaction_strategy'),
+                        'automatic_compactions': sum(p.get('trigger') == 'automatic' for p in checkpoints),
                         'manual_compactions': sum(p.get('trigger') != 'automatic' for p in checkpoints),
                         'budget_failures': sum(p['failed'] for p in context),
                         'estimates': context,

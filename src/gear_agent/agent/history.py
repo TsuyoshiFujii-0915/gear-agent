@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 import json
+from copy import deepcopy
 
 from gear_agent.errors import gear_error
 from gear_agent.model.types import ModelHistory
@@ -85,7 +86,7 @@ def build_model_history(
     preceding_response_assistant_text: str | None = None
     for event in replay_events:
         kind = _required_event_kind(event)
-        if kind == "user_input":
+        if kind in ("user_input", "continuation_instruction"):
             payload = _required_payload(event, kind)
             input_items.append(
                 {
@@ -97,21 +98,13 @@ def build_model_history(
             continue
         if kind == "assistant_message":
             payload = _required_payload(event, kind)
-            assistant_text = _required_string(payload, "text", "assistant_message")
-            if preceding_response_assistant_text is None:
+            assistant_text = standalone_assistant_text(payload, preceding_response_assistant_text)
+            if assistant_text is not None:
                 input_items.append(
                     {
                         "role": "assistant",
                         "content": assistant_text,
                     }
-                )
-            elif assistant_text != preceding_response_assistant_text:
-                raise _shape_error(
-                    (
-                        "assistant_message.text does not match the preceding "
-                        "model_response message output."
-                    ),
-                    "assistant_message",
                 )
             preceding_response_assistant_text = None
             continue
@@ -128,7 +121,7 @@ def build_model_history(
             replay_diagnostic = replay_diagnostic.combine(
                 replayed_output.diagnostic
             )
-            preceding_response_assistant_text = _assistant_output_text(output_items)
+            preceding_response_assistant_text = assistant_output_text(output_items)
             for item in output_items:
                 item_type = _required_string(item, "type", "model_response.output")
                 if item_type == "function_call":
@@ -155,7 +148,11 @@ def build_model_history(
             result = payload.get("result")
             if not isinstance(result, dict):
                 raise _shape_error("tool_result.result must be an object.", "tool_result")
-            input_items.append(_history_function_call_output_item(call_id, result))
+            if 'model_visible_output' in payload:
+                serialized = _required_string(payload, 'model_visible_output', kind)
+                input_items.append({'type': 'function_call_output', 'call_id': call_id, 'output': serialized})
+            else:
+                input_items.append(_history_function_call_output_item(call_id, result))
 
     return ModelHistory(items=input_items, diagnostic=replay_diagnostic)
 
@@ -177,6 +174,24 @@ def select_effective_events(events: list[dict[str, Any]]) -> list[dict[str, Any]
     if checkpoint is None:
         return list(events)
     checkpoint_index, _ = checkpoint
+    checkpoint_event = events[checkpoint_index]
+    if checkpoint_event['kind'] == 'compaction_selective':
+        payload = _required_payload(checkpoint_event, 'compaction_selective')
+        if payload.get('schema') != 'gear-agent.selective.v1':
+            raise _shape_error('Unsupported selective checkpoint schema.', 'compaction_selective')
+        selected = payload.get('events')
+        if not isinstance(selected, list) or any(not isinstance(item, dict) for item in selected):
+            raise _shape_error('Selective checkpoint events must be objects.', 'compaction_selective')
+        for index, item in enumerate(selected):
+            kind = _required_event_kind(item)
+            if kind == 'compaction_summary':
+                summary = _required_string(_required_payload(item, kind), 'text', kind)
+                if not summary.strip():
+                    raise _shape_error('Summary checkpoint must not be empty.', kind)
+            if kind == 'compaction_selective' or (kind == 'compaction_summary' and index != 0):
+                raise _shape_error('Selective checkpoints must be flattened.', 'compaction_selective')
+        validate_tool_pairs(selected)
+        return deepcopy(selected) + events[checkpoint_index + 1:]
     return events[checkpoint_index:]
 
 
@@ -186,6 +201,8 @@ def _latest_compaction_checkpoint(
     for index in range(len(events) - 1, -1, -1):
         event = events[index]
         kind = _required_event_kind(event)
+        if kind == "compaction_selective":
+            return index, ""
         if kind != "compaction_summary":
             continue
         payload = _required_payload(event, kind)
@@ -215,7 +232,48 @@ def _response_output_items(response: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
-def _assistant_output_text(items: list[dict[str, Any]]) -> str | None:
+def standalone_assistant_text(
+    payload: dict[str, Any], preceding_response_text: str | None,
+) -> str | None:
+    """Returns standalone assistant text or omits its corresponding mirror.
+
+    Args:
+        payload: Canonical assistant_message payload.
+        preceding_response_text: Combined text from the preceding model response,
+            or None when no response message is awaiting its mirror.
+
+    Returns:
+        Standalone text, or None for a matching response mirror.
+
+    Raises:
+        GearError: If the text is malformed or differs from its response.
+    """
+    assistant_text = _required_string(payload, "text", "assistant_message")
+    if preceding_response_text is None:
+        return assistant_text
+    if assistant_text != preceding_response_text:
+        raise _shape_error(
+            (
+                "assistant_message.text does not match the preceding "
+                "model_response message output."
+            ),
+            "assistant_message",
+        )
+    return None
+
+
+def assistant_output_text(items: list[dict[str, Any]]) -> str | None:
+    """Combines response message text using the canonical mirror semantics.
+
+    Args:
+        items: Model response output items, including multi-message responses.
+
+    Returns:
+        Concatenated output text, or None if the response contains no messages.
+
+    Raises:
+        GearError: If a response message has malformed content.
+    """
     message_found = False
     parts: list[str] = []
     for item in items:
@@ -298,3 +356,37 @@ def _shape_error(message: str, origin: str) -> Exception:
         True,
         {},
     )
+
+
+def validate_tool_pairs(events: list[dict[str, Any]]) -> None:
+    """Validates unique calls and ordered results in a flattened snapshot.
+
+    Args:
+        events: Effective canonical events without nested checkpoints.
+
+    Raises:
+        GearError: If a call is duplicated or a result is orphaned/duplicated.
+            Incomplete calls remain legal because failed turns are pinned.
+    """
+    calls: set[str] = set()
+    results: set[str] = set()
+    for event in events:
+        kind = _required_event_kind(event)
+        if kind == 'model_response':
+            response = read_model_response_event(_required_payload(event, kind)).response
+            for item in _response_output_items(response):
+                if item['type'] != 'function_call':
+                    continue
+                _validate_function_call_item(item)
+                call_id = item['call_id']
+                if call_id in calls:
+                    raise _shape_error('Duplicate function call identifier.', 'model_response')
+                calls.add(call_id)
+        elif kind == 'tool_result':
+            payload = _required_payload(event, kind)
+            call_id = _required_string(payload, 'call_id', kind)
+            if call_id not in calls or call_id in results:
+                raise _shape_error('Orphaned or duplicate function call result.', kind)
+            if not isinstance(payload.get('result'), dict):
+                raise _shape_error('Tool result must be an object.', kind)
+            results.add(call_id)

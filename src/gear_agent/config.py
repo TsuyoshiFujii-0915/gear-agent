@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import tomllib
 
 from gear_agent.errors import GearError, gear_error
+from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
 from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
 
 
@@ -191,6 +192,7 @@ class AppConfig:
         web_search: Tavily web search configuration when enabled.
         web_fetch: Tavily web fetch configuration when enabled.
         context_budget: Explicit context policy; absent legacy configuration disables it.
+        compaction: Strategy policy; absent legacy configuration retains summary.
     """
 
     model: ModelConfig
@@ -199,6 +201,7 @@ class AppConfig:
     web_search: WebSearchConfig | None
     web_fetch: WebFetchConfig | None
     context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET
+    compaction: CompactionConfig = SUMMARY_COMPACTION
 
 
 def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
@@ -297,6 +300,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
         web_search,
         web_fetch,
         _load_context_budget(raw_data),
+        load_compaction_config(raw_data, environment),
     )
 
 

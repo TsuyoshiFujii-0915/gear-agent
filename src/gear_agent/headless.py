@@ -34,6 +34,7 @@ class RunSpec:
     web_fetch: dict[str, object] | None
     runtime: dict[str, object]
     context_budget: dict[str, object]
+    compaction: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,12 @@ def describe_run(agent: AgentRuntime, session_id: str, prompt: TaskPrompt) -> Ru
     if config.web_fetch is not None:
         web_fetch = asdict(config.web_fetch)
         del web_fetch['api_key']
+    compaction: dict[str, object] = {'strategy': config.compaction.strategy,
+                                     'fallback': config.compaction.fallback, 'jev': None}
+    if config.compaction.jev is not None:
+        jev = config.compaction.jev
+        compaction['jev'] = {'model': jev.model, 'timeout_seconds': jev.timeout_seconds,
+                             'policy': asdict(jev.policy)}
     return RunSpec(
         session_id=session_id,
         prompt_source=prompt.source,
@@ -119,6 +126,7 @@ def describe_run(agent: AgentRuntime, session_id: str, prompt: TaskPrompt) -> Ru
         web_fetch=web_fetch,
         runtime=runtime,
         context_budget=asdict(config.context_budget),
+        compaction=compaction,
     )
 
 
@@ -175,6 +183,7 @@ def diagnostic_secrets(config: AppConfig) -> tuple[str, ...]:
     return tuple(value for value in (
         config.model.url,
         config.model.api_key,
+        config.compaction.jev.api_key if config.compaction.jev is not None else None,
         config.web_search.api_key if config.web_search is not None else None,
         config.web_fetch.api_key if config.web_fetch is not None else None,
     ) if value)

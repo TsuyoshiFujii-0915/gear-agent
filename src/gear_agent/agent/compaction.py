@@ -59,7 +59,7 @@ class CompactionService:
             Effective request after checkpoint selection and opaque sanitization.
         """
         effective_events = select_effective_events(events)
-        sanitized_events = _strip_model_response_opaque_reasoning(effective_events)
+        sanitized_events = _project_summary_events(effective_events)
         prompt = _build_compaction_prompt(sanitized_events)
         return ContextRequest(prompt, [], COMPACTION_INSTRUCTIONS, COMPACTION_INSTRUCTIONS, 0)
 
@@ -88,6 +88,27 @@ class CompactionService:
         Raises:
             GearError: If the model fails or returns no summary.
         """
+        summary = self.summarize_prepared(request, timeout_seconds, stream_idle_timeout_seconds)
+        payload = {'text': summary}
+        if trigger == 'automatic':
+            payload['trigger'] = trigger
+        store.append(session_id, "compaction_summary", payload)
+        return summary
+
+    def summarize_prepared(
+        self, request: ContextRequest, timeout_seconds: int,
+        stream_idle_timeout_seconds: int | None,
+    ) -> str:
+        """Executes a textual request without committing a checkpoint.
+
+        Args:
+            request: Prepared, sanitized summary request.
+            timeout_seconds: Model request timeout.
+            stream_idle_timeout_seconds: Streaming idle timeout.
+
+        Returns:
+            Nonempty summary text.
+        """
         response = request_model(
             self._adapter, request, timeout_seconds, stream_idle_timeout_seconds,
             SilentModelProgressEventSink(), self._observer, 'compaction',
@@ -102,10 +123,6 @@ class CompactionService:
                 True,
                 {},
             )
-        payload = {'text': summary}
-        if trigger == 'automatic':
-            payload['trigger'] = trigger
-        store.append(session_id, "compaction_summary", payload)
         return summary
 
 
@@ -122,12 +139,21 @@ def _build_compaction_prompt(effective_events: list[dict[str, Any]]) -> str:
     )
 
 
-def _strip_model_response_opaque_reasoning(
+def _project_summary_events(
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Omits replay-only representations from the summary projection.
+
+    Args:
+        events: Effective canonical events, including selective checkpoints.
+
+    Returns:
+        Events with opaque reasoning and exact tool-output copies removed.
+        Canonical tool results and the original stored events remain unchanged.
+    """
     sanitized_events: list[dict[str, Any]] = []
     for event in events:
-        if event.get("kind") != "model_response":
+        if event.get("kind") not in ("model_response", "tool_result"):
             sanitized_events.append(event)
             continue
         payload = event.get("payload")
@@ -135,6 +161,11 @@ def _strip_model_response_opaque_reasoning(
             sanitized_events.append(event)
             continue
         sanitized_event = dict(event)
-        sanitized_event["payload"] = strip_opaque_reasoning_from_event(payload)
+        if event["kind"] == "model_response":
+            sanitized_event["payload"] = strip_opaque_reasoning_from_event(payload)
+        else:
+            sanitized_event["payload"] = {
+                key: value for key, value in payload.items() if key != "model_visible_output"
+            }
         sanitized_events.append(sanitized_event)
     return sanitized_events
