@@ -79,3 +79,31 @@ than normal conversation replay. With LM Studio, `lms ps` shows the actual loade
 capacity. Changing that capacity requires reloading the target model with
 `lms load MODEL --context-length TOKENS` after unloading it. The example does not
 change server settings or infer a model capacity automatically.
+
+## Jev threshold sweep
+
+Use the same saved history for an independent live Jev call at each threshold:
+
+```sh
+uv run python -m examples.jev_threshold_sweep \
+  --config .gear/config.toml \
+  --source-run test_outputs/compaction-comparison/PREVIOUS-RUN \
+  --output test_outputs/compaction-comparison/NEW-SWEEP \
+  --thresholds 0.2 0.3 0.5 0.7 \
+  --jev-model jev-1.13.0 --jev-timeout 10
+```
+
+This does not regenerate the conversation or repeat the main-model summary.
+Every threshold starts from the original events. The threshold is applied locally
+after scoring; it does not change the state or questions sent to Jev. Responses
+may vary, so the report includes the actual scores for every run. No retries or
+fallbacks are enabled, and the first failure stops the sweep. Each case saves its
+checkpoint, model-visible input, per-tool disposition, usage, and timings in the
+ignored output directory. Existing policy defaults remain unchanged.
+
+`score >= keep_threshold` means keep. A higher threshold is more aggressive:
+keep the full pair when the result score passes; otherwise retain the call with
+a shorter result preview when only the call score passes; drop the pair when
+neither passes. A preview is only substituted if smaller than the original.
+Protected recent interactions remain regardless of threshold. This experiment
+measures replay reduction, not downstream task accuracy or a recommended policy.

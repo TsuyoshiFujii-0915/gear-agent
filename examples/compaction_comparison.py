@@ -185,7 +185,7 @@ def interaction_changes(before: list[dict[str, Any]], after: list[dict[str, Any]
 
 def measurements(items: list[dict[str, Any]], tools: list[dict[str, object]], instructions: str) -> dict[str, int]:
     """Measures comparable effective inputs without claiming an actual tokenizer count."""
-    request = ContextRequest(items, tools, instructions, AGENT_INSTRUCTIONS, len(items) - 1)
+    request = ContextRequest(items, tools, instructions, instructions, len(items) - 1)
     diagnostic = ContextBudgetManager(DISABLED_CONTEXT_BUDGET, ByteTokenEstimator()).evaluate(request)
     return {'input_items': len(items),
             'input_json_bytes': len(json.dumps(items, ensure_ascii=False, separators=(',', ':')).encode('utf-8')),
