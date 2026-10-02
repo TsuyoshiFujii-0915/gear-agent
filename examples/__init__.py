@@ -1,0 +1,1 @@
+"""Executable, repository-local examples."""
