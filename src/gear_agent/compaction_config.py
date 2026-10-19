@@ -31,7 +31,7 @@ class JevPolicy:
             raise _invalid('limits', 'State/request limits must not exceed 25000/30000 estimated tokens.')
 
 
-DEFAULT_JEV_POLICY = JevPolicy(0.2, 1, 160, 25_000, 30_000, 32)
+DEFAULT_JEV_POLICY = JevPolicy(0.3, 1, 160, 25_000, 30_000, 32)
 
 
 @dataclass(frozen=True)

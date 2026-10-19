@@ -26,9 +26,13 @@ fixture files were not read.
 
 The exact same source events, including that pending message, go to the
 production `SummaryCompactionStrategy` and `JevCompactionStrategy`, once each.
-Jev uses PR #26's default policy: threshold 0.2, one recent turn protected,
+New comparisons use the current `DEFAULT_JEV_POLICY`: threshold 0.3, one recent turn protected,
 160-character previews, and the default state/request/batch limits. No fallback
-or provider retry is enabled. The main model uses the supplied configuration's
+or provider retry is enabled. The effective policy is recorded in `results.json`.
+This example uses the built-in Jev policy, not `[compaction.jev]` overrides from
+the supplied configuration. PR #26's default was 0.2; saved results from those
+earlier runs retain their original policy and are not rewritten.
+The main model uses the supplied configuration's
 model, replay mode, streaming setting, and timeouts. Failure leaves partial
 evidence and `status.json` with `status: stopped`; do not treat that as a result
 or silently rerun with different settings. Setup failures exit before execution.
@@ -99,7 +103,8 @@ after scoring; it does not change the state or questions sent to Jev. Responses
 may vary, so the report includes the actual scores for every run. No retries or
 fallbacks are enabled, and the first failure stops the sweep. Each case saves its
 checkpoint, model-visible input, per-tool disposition, usage, and timings in the
-ignored output directory. Existing policy defaults remain unchanged.
+ignored output directory. Running the sweep does not modify the configured or
+built-in policy defaults.
 
 `score >= keep_threshold` means keep. A higher threshold is more aggressive:
 keep the full pair when the result score passes; otherwise retain the call with

@@ -574,7 +574,7 @@ fallback = "summary" # 明示的に指定。省略時は "none"（失敗を通�
 model = "jev-1.13.0" # バージョン固定。latest / preview は使用不可
 api_key_env = "TYPESAFE_API_KEY"
 timeout_seconds = 10
-keep_threshold = 0.2
+keep_threshold = 0.3 # 省略時も0.3。有効範囲内で変更可能
 preserve_recent_turns = 1
 truncate_chars = 160
 max_state_tokens = 25000
@@ -587,7 +587,13 @@ export TYPESAFE_API_KEY='your-typesafe-api-key'
 ```
 
 `model` と `api_key_env` は必須です。それ以外の Jev 設定は上記が既定値です。
-低めの `keep_threshold` は不確実な履歴を残すための保守的な方針です。
+`keep_threshold` は有限の数値で `0 < keep_threshold <= 1` の範囲を指定できます。
+Jev 応答後にローカルで `score >= keep_threshold` を判定するため、0.3ちょうども保持対象です。
+低い値ほど保持しやすく、高い値ほど除外・短縮しやすくなります。保護対象は閾値によらず保持します。
+明示した値（0.2、0.35、0.7など）は常に優先され、既存の設定ファイルは書き換えません。
+以前の既定値による動作を維持する場合は `keep_threshold = 0.2` を明示してください。
+当面の既定値0.3は単一課題の比較結果を踏まえた選択であり、すべてのタスクでの最適性や
+圧縮後の品質を保証するものではありません。
 `preserve_recent_turns` は現在のターンに加えて保護する直前のターン数です。
 `strategy = "summary"` に戻す場合は `[compaction.jev]` を削除し、`fallback = "none"`
 にしてください。`[compaction]` 全体を省略した旧設定も引き続き動作します。
@@ -620,7 +626,8 @@ Jev の state とバッチ全体には主モデルと独立した上限を適用
 従来の要約を一度試みます。要約用リクエストや要約後のリクエストも予算に入らなければ、
 従来の `context_budget_exceeded` エラーになります。
 
-headless 実行の `events.jsonl` の `compaction_strategy` および `metrics.json` の
+headless 実行の `run.json` の `compaction.jev.policy` には、既定値・上書き値を問わず
+実際の有効閾値を記録します。`events.jsonl` の `compaction_strategy` および `metrics.json` の
 `context.strategies` で、方式、Jevバージョン、候補/保護件数、保持/切り詰め/除去件数、
 圧縮前後の推定入力、削減率、バッチ数、Jev所要時間、報告された利用量、
 フォールバック理由・結果を確認できます。会話・ツール本文やプロバイダーのエラー本文は
