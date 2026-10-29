@@ -541,10 +541,13 @@ def _format_web_search_result_lines(results: list[dict[object, object]]) -> list
         if title is not None and not isinstance(title, str):
             raise ValueError("web_search result item.title must be a string or null.")
         url = _required_string(item, "url", "web_search result item")
-        content = _required_string(item, "content", "web_search result item")
+        if "content" in item and item["content"] is None:
+            content_preview = "(snippet not reported)"
+        else:
+            content_preview = _preview_line(_required_string(item, "content", "web_search result item"))
         lines.append(f"  {index}. {_preview_line(title) if title is not None else '(title not reported)'}")
         lines.append(f"     {_preview_line(url)}")
-        lines.append(f"     {_preview_line(content)}")
+        lines.append(f"     {content_preview}")
     return lines
 
 
