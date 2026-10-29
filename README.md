@@ -15,7 +15,7 @@ Codex の中核動作を理解しやすい Python コードとして表現する
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
 - ファイル読み取り、ファイル書き込み、シェル実行、パッチ適用ツール
-- Tavily による Web 検索、Web ページ本文取得ツール
+- Tavily / Firecrawl による Web 検索、Web ページ本文取得ツール
 - JSONL によるセッションイベント保存
 
 ## 必要なもの
@@ -184,7 +184,7 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 
 `web_search` と `web_fetch` は独立した `provider` を選択します。
 主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
-`tavily` のみです。DeepSeek / treg / Exa / Firecrawl は別Issueで追加するため、
+`tavily` と `firecrawl` です。DeepSeek / treg / Exa は別Issueで追加するため、
 現時点で指定すると設定エラーになります。
 
 ```toml
@@ -235,7 +235,7 @@ Tavily 固有項目をすべて各 `.tavily` テーブルへ移してくださ�
 未知のprovider・キー、欠落した必須項目、不正な型・値域を明示的に拒否します。
 暗黙のプロバイダ切替・再試行・fallbackはありません。
 
-検索の `max_results` は従来どおり 1〜20、`timeout_seconds` は1以上の整数です。
+Tavily 検索の `max_results` は従来どおり 1〜20、`timeout_seconds` は1以上の整数です。
 `search_depth` は `basic` / `advanced` / `fast` / `ultra-fast` を指定します。
 取得の `timeout_seconds` は Tavily Extract の上限に合わせて 1〜60、
 `max_content_chars` は1以上の整数です。`extract_depth` は `basic` / `advanced`、
@@ -253,7 +253,8 @@ Tavily の応答から最終リダイレクト先を確定できないため、`
 空本文・部分失敗・HTTP 200内のerror・不正JSON・本文上限超過はエラーになります。
 無断の要約・切り詰めは行いません。
 
-Web通信はホストから `https://api.tavily.com/search` または `/extract` へ送信します。
+Web通信はホストから、Tavily 選択時は `https://api.tavily.com/search` または `/extract`、
+Firecrawl 選択時は `https://api.firecrawl.dev/v2/search` または `/v2/scrape` へ送信します。
 検索語・取得URLを選択プロバイダへ渡すため、サービス側の料金が発生し得ます。
 `runtime.network` はDocker shellのネットワーク制御であり、Webツール通信とは別です。
 取得先は公開HTTP/HTTPS URLに限定し、userinfo・ローカルホスト・非公開IP・
@@ -276,6 +277,85 @@ JSONL・Jev・要約・再開は既存のツール結果契約を利用します
 設計判断は [ADR 0023](docs/decisions/0023-select-web-providers-independently.md) と
 [ADR 0024](docs/decisions/0024-bound-web-provider-http-and-url-inputs.md) に記録しています。
 認証付きlive検証は、各プロバイダの実装Issueで別途実施します。
+
+### Firecrawl Cloud v2
+
+[Firecrawl](https://www.firecrawl.dev/) でアカウントを作成し、dashboard で API キーを
+発行して、有効な credit 枠・残高を用意してください。キーを実行環境の
+`FIRECRAWL_API_KEY` に設定します。キーはチャット・Issue・PR・設定ファイルへ貼らないでください。
+上の `[tool]` で必要な Web ツールを有効にし、対応する設定テーブルを次の例へ置き換えます。
+検索だけ Tavily、取得だけ Firecrawl の組み合わせも利用できます。
+
+```toml
+[web_search]
+provider = "firecrawl"
+api_key_env = "FIRECRAWL_API_KEY"
+max_results = 5
+timeout_seconds = 20
+
+[web_search.firecrawl]
+highlights = false
+
+[web_fetch]
+provider = "firecrawl"
+api_key_env = "FIRECRAWL_API_KEY"
+timeout_seconds = 20
+max_content_chars = 20000
+
+[web_fetch.firecrawl]
+only_main_content = true
+max_age_ms = 172800000
+wait_for_ms = 0
+proxy = "basic"
+store_in_cache = false
+```
+
+固有オプションは `.firecrawl` 内にだけ指定でき、省略時は上の値を使います。
+Tavily の固有設定を残したまま provider だけ変更すると設定エラーになります。
+検索件数は 1〜100、query は最大500文字です。Search は `sources: ["web"]` のみを
+指定し、`scrapeOptions` を付けません。必要なページを `web_fetch` で別途取得します。
+`highlights = false` なら検索結果の `content` は description/snippet、true なら
+クエリに関連する highlights です。各結果の `firecrawl.content_kind` に区別を記録し、
+どちらも本文全体とは扱いません。検索だけで全ページの取得費用を追加しません。
+
+両ツールの `timeout_seconds` は 2〜301秒です。API の `timeout` は
+`(timeout_seconds - 1) * 1000` ミリ秒とし、HTTP 待機に1秒の余裕を設けます。
+HTTPX の待機は各ネットワーク操作のタイムアウトであり、呼出し全体の実時間上限ではありません。
+`wait_for_ms` は 0〜60000、かつ API timeout 未満です。
+`max_age_ms` は0以上の許容キャッシュ年齢で、既定は2日です。常に新規取得を要求するには
+0を指定します。`store_in_cache = false` は新たなキャッシュ保存を抑制しますが、
+既存キャッシュの利用禁止や全経路の Zero Data Retention を保証しません。
+
+Scrape は `formats: ["markdown"]`、`skipTlsVerification: false`、`parsers: []`、
+`onlyCleanContent: false` を明示します。API 接続の証明書検証も有効です。
+初版は公開 Web ページの Markdown 本文に限定し、PDF・画像解析、base64、crawl/map/batch、
+スクリーンショット、browser actions、ログイン、Cookie、LLM による summary/JSON 抽出、
+self-host は対象外です。PDF は `parsers: []` でも base64 取得として課金され得ますが、
+Gear は本文として返さずエラーにします。対応する content type は HTML/XHTML・plain text・Markdown
+です。metadata の型不正・取得先の error/失敗 status・空本文・上限超過もエラーにします。
+
+`proxy` は basic が既定で、enhanced / auto は明示設定で選択できます。
+auto は Firecrawl 内部で basic から enhanced へ再試行し得ます。
+Gear 自身の自動再試行・別 provider への fallback はありません。
+検索と各ページの Scrape は別課金です。2026-10-29 確認の
+[公式 OpenAPI](https://docs.firecrawl.dev/api-reference/v2-openapi.json) は enhanced に追加料金なしと
+記載しており、Issue #35 作成時の調査と異なります。PDF 解析や追加処理の credit は別途発生し得るため、
+利用時の [料金](https://www.firecrawl.dev/pricing) を確認してください。
+Gear は料金を推定せず、Search の `creditsUsed` と Scrape の `data.metadata.creditsUsed` が
+報告された場合だけ credit 単位で記録します。欠落時は `credits = null`、usage は空配列です。
+
+取得結果は `requested_url` と metadata の `sourceURL` / `url` を区別します。
+`final_url` は metadata.url がある場合のみ設定し、URL metadata がない場合は
+共通の `url` を要求URLとして明示的に扱います。任意 metadata の欠落は null とし、
+title が配列なら改行で連結します。選択した metadata は `firecrawl`、usage は
+`provider_metadata.firecrawl.usage` に保存します。provider warning は生の文面をコピーせず、
+固定の安全な診断に変換します。
+
+詳細は [Search](https://docs.firecrawl.dev/api-reference/endpoint/search)、
+[Scrape](https://docs.firecrawl.dev/api-reference/endpoint/scrape)、
+[ADR 0025](docs/decisions/0025-firecrawl-cloud-v2-policy.md) を参照してください。
+本実装ではモック HTTP による契約テストを実施済みです。実装環境にキーがないため、
+認証疎通・実サイトの取得成功率・実消費 credit は未確認です。
 
 ## コンテキスト予算と自動コンパクション
 
@@ -476,8 +556,8 @@ uv run gear run --prompt-file task.txt --run-dir ../results/case-001
 | `apply_patch` | ワークスペース内に unified diff パッチを適用します。                      |
 | `glob`        | ワークスペース内のファイルとディレクトリを glob パターンで検索します。    |
 | `grep`        | ワークスペース内の UTF-8 テキストファイルを正規表現で検索します。         |
-| `web_search`  | Tavily Search API で Web 検索します。`web_search` で制御します。          |
-| `web_fetch`   | Tavily Extract API で URL の本文を取得します。`web_fetch` で制御します。  |
+| `web_search`  | 選択した Tavily / Firecrawl で Web 検索します。`web_search` で制御します。 |
+| `web_fetch`   | 選択した Tavily / Firecrawl で URL 本文を取得します。`web_fetch` で制御します。 |
 
 ファイル操作とパッチ適用は、ワークスペース外のパスを明示的に拒否します。
 ファイル検索ツールも、ワークスペース外のパスを明示的に拒否します。

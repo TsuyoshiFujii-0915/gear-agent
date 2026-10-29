@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
-from typing import Any
+from typing import Any, cast
 
-from gear_agent.config import WebFetchConfig
+from gear_agent.config import TavilyFetchOptions, WebFetchConfig
 from gear_agent.errors import GearError, gear_error
 from gear_agent.tools.providers.base import ProviderResult, WebUsage
 from gear_agent.tools.providers.http import WebHttpClient, post_web_json
@@ -69,12 +69,13 @@ class TavilyFetchProvider:
         return self._config.max_content_chars
 
     def fetch(self, url: str) -> ProviderResult:
+        options = cast(TavilyFetchOptions, self._config.options)
         payload: dict[str, object] = {
             "urls": [url],
-            "extract_depth": self._config.options.extract_depth,
-            "format": self._config.options.content_format,
-            "include_images": self._config.options.include_images,
-            "include_favicon": self._config.options.include_favicon,
+            "extract_depth": options.extract_depth,
+            "format": options.content_format,
+            "include_images": options.include_images,
+            "include_favicon": options.include_favicon,
             "timeout": self._config.timeout_seconds,
             "include_usage": True,
         }
