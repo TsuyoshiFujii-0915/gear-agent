@@ -10,6 +10,7 @@ import tomllib
 from gear_agent.errors import GearError, gear_error
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
 from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
+from gear_agent.exa_config import ExaFetchConfig, ExaSearchConfig, load_exa_fetch, load_exa_search
 
 
 DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
@@ -198,8 +199,8 @@ class AppConfig:
     model: ModelConfig
     runtime: RuntimeConfig
     tool: ToolConfig
-    web_search: WebSearchConfig | None
-    web_fetch: WebFetchConfig | None
+    web_search: WebSearchConfig | ExaSearchConfig | None
+    web_fetch: WebFetchConfig | ExaFetchConfig | None
     context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET
     compaction: CompactionConfig = SUMMARY_COMPACTION
 
@@ -588,14 +589,18 @@ def _load_web_search_config(
     raw_data: dict[str, object],
     enabled: bool,
     environment: Mapping[str, str],
-) -> WebSearchConfig | None:
+) -> WebSearchConfig | ExaSearchConfig | None:
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
+    if _web_provider(table, "web_search") == "exa":
+        api_key_env = _required_string(table, "api_key_env", "web_search")
+        return load_exa_search(table, _required_secret(api_key_env, environment, "web_search.api_key_env"))
     _reject_unknown_keys(
         table,
         "web_search",
         {
+            "provider",
             "api_key_env",
             "search_depth",
             "max_results",
@@ -620,14 +625,18 @@ def _load_web_fetch_config(
     raw_data: dict[str, object],
     enabled: bool,
     environment: Mapping[str, str],
-) -> WebFetchConfig | None:
+) -> WebFetchConfig | ExaFetchConfig | None:
     if not enabled:
         return None
     table = _required_table(raw_data, "web_fetch")
+    if _web_provider(table, "web_fetch") == "exa":
+        api_key_env = _required_string(table, "api_key_env", "web_fetch")
+        return load_exa_fetch(table, _required_secret(api_key_env, environment, "web_fetch.api_key_env"))
     _reject_unknown_keys(
         table,
         "web_fetch",
         {
+            "provider",
             "api_key_env",
             "extract_depth",
             "content_format",
@@ -648,6 +657,15 @@ def _load_web_fetch_config(
         include_favicon=_required_bool(table, "include_favicon", "web_fetch"),
         max_content_chars=_required_positive_int(table, "max_content_chars", "web_fetch"),
     )
+
+
+def _web_provider(table: dict[str, object], origin: str) -> str:
+    # Provider omission is the documented compatibility rule for legacy Tavily TOML.
+    provider = table.get("provider", "tavily")
+    if provider not in ("tavily", "exa"):
+        raise gear_error("config_value_invalid", f"Unsupported provider in {origin}.",
+                         "config", True, {"table": origin, "key": "provider"})
+    return provider
 
 
 def _required_secret(
