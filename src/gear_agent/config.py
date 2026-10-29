@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
@@ -101,8 +101,8 @@ class ToolConfig:
         apply_patch: Whether to expose the patch application tool.
         glob: Whether to expose the filesystem glob tool.
         grep: Whether to expose the filesystem grep tool.
-        web_search: Whether to expose the Tavily web search tool.
-        web_fetch: Whether to expose the Tavily web fetch tool.
+        web_search: Whether to expose the web search tool.
+        web_fetch: Whether to expose the web fetch tool.
     """
 
     shell_tool: bool
@@ -116,47 +116,44 @@ class ToolConfig:
 
 
 @dataclass(frozen=True)
-class WebSearchConfig:
-    """Tavily web search configuration.
+class TavilySearchOptions:
+    """Tavily-only search options, separate from common provider settings."""
 
-    Attributes:
-        api_key: Tavily API key resolved from the configured environment variable.
-        search_depth: Tavily search depth.
-        max_results: Maximum Tavily search results to return.
-        timeout_seconds: Tavily request timeout in seconds.
-        include_answer: Whether Tavily should include a generated answer.
-        include_raw_content: Whether Tavily should include raw result content.
-    """
-
-    api_key: str
     search_depth: str
-    max_results: int
-    timeout_seconds: int
     include_answer: bool
     include_raw_content: bool
 
 
 @dataclass(frozen=True)
-class WebFetchConfig:
-    """Tavily web fetch configuration.
+class TavilyFetchOptions:
+    """Tavily-only extraction options."""
 
-    Attributes:
-        api_key: Tavily API key resolved from the configured environment variable.
-        extract_depth: Tavily extraction depth.
-        content_format: Extracted content format.
-        timeout_seconds: Tavily request timeout in seconds.
-        include_images: Whether Tavily should include page image URLs.
-        include_favicon: Whether Tavily should include the page favicon URL.
-        max_content_chars: Maximum content length accepted from Tavily.
-    """
-
-    api_key: str
     extract_depth: str
     content_format: str
-    timeout_seconds: int
     include_images: bool
     include_favicon: bool
+
+
+@dataclass(frozen=True)
+class WebSearchConfig:
+    """Independent search provider settings with an environment-resolved secret."""
+
+    api_key: str = field(repr=False)
+    max_results: int
+    timeout_seconds: int
+    provider: str
+    options: TavilySearchOptions
+
+
+@dataclass(frozen=True)
+class WebFetchConfig:
+    """Independent fetch provider settings with an environment-resolved secret."""
+
+    api_key: str = field(repr=False)
+    timeout_seconds: int
     max_content_chars: int
+    provider: str
+    options: TavilyFetchOptions
 
 
 @dataclass(frozen=True)
@@ -189,8 +186,8 @@ class AppConfig:
         model: Model endpoint configuration.
         runtime: Runtime configuration.
         tool: Model-callable tool configuration.
-        web_search: Tavily web search configuration when enabled.
-        web_fetch: Tavily web fetch configuration when enabled.
+        web_search: Independent web search configuration when enabled.
+        web_fetch: Independent web fetch configuration when enabled.
         context_budget: Explicit context policy; absent legacy configuration disables it.
         compaction: Strategy policy; absent legacy configuration retains summary.
     """
@@ -584,6 +581,29 @@ def _validate_reasoning_replay_url(
     )
 
 
+def _web_provider_options(
+    table: dict[str, object], name: str, common_keys: set[str], vendor_keys: set[str],
+) -> tuple[str, dict[str, object]]:
+    # Absence explicitly selects Tavily for legacy configuration compatibility.
+    provider = _required_string(table, "provider", name) if "provider" in table else "tavily"
+    if provider != "tavily":
+        raise gear_error(
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily.",
+            "config", True, {"table": name, "key": "provider"},
+        )
+    _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
+    if "tavily" in table:
+        if vendor_keys.intersection(table):
+            raise gear_error(
+                "config_value_invalid", f"Cannot mix flat and nested Tavily options in {name}.",
+                "config", True, {"table": name},
+            )
+        options = _required_table(table, "tavily")
+        _reject_unknown_keys(options, f"{name}.tavily", vendor_keys)
+        return provider, options
+    return provider, {key: table[key] for key in vendor_keys if key in table}
+
+
 def _load_web_search_config(
     raw_data: dict[str, object],
     enabled: bool,
@@ -592,27 +612,21 @@ def _load_web_search_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
-    _reject_unknown_keys(
-        table,
-        "web_search",
-        {
-            "api_key_env",
-            "search_depth",
-            "max_results",
-            "timeout_seconds",
-            "include_answer",
-            "include_raw_content",
-        },
+    provider, options = _web_provider_options(
+        table, "web_search", {"api_key_env", "max_results", "timeout_seconds"},
+        {"search_depth", "include_answer", "include_raw_content"},
     )
+    vendor = TavilySearchOptions(
+        search_depth=_required_web_search_depth(options),
+        include_answer=_required_bool(options, "include_answer", "web_search"),
+        include_raw_content=_required_bool(options, "include_raw_content", "web_search"),
+    )
+    max_results = _required_int_in_range(table, "max_results", "web_search", 1, 20)
+    timeout = _required_positive_int(table, "timeout_seconds", "web_search")
     api_key_env = _required_string(table, "api_key_env", "web_search")
-    api_key = _required_secret(api_key_env, environment, "web_search.api_key_env")
     return WebSearchConfig(
-        api_key=api_key,
-        search_depth=_required_web_search_depth(table),
-        max_results=_required_int_in_range(table, "max_results", "web_search", 1, 20),
-        timeout_seconds=_required_positive_int(table, "timeout_seconds", "web_search"),
-        include_answer=_required_bool(table, "include_answer", "web_search"),
-        include_raw_content=_required_bool(table, "include_raw_content", "web_search"),
+        api_key=_required_secret(api_key_env, environment, "web_search.api_key_env"),
+        max_results=max_results, timeout_seconds=timeout, provider=provider, options=vendor,
     )
 
 
@@ -624,29 +638,22 @@ def _load_web_fetch_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_fetch")
-    _reject_unknown_keys(
-        table,
-        "web_fetch",
-        {
-            "api_key_env",
-            "extract_depth",
-            "content_format",
-            "timeout_seconds",
-            "include_images",
-            "include_favicon",
-            "max_content_chars",
-        },
+    provider, options = _web_provider_options(
+        table, "web_fetch", {"api_key_env", "timeout_seconds", "max_content_chars"},
+        {"extract_depth", "content_format", "include_images", "include_favicon"},
     )
+    vendor = TavilyFetchOptions(
+        extract_depth=_required_web_fetch_depth(options),
+        content_format=_required_web_fetch_content_format(options),
+        include_images=_required_bool(options, "include_images", "web_fetch"),
+        include_favicon=_required_bool(options, "include_favicon", "web_fetch"),
+    )
+    timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 1, 60)
+    limit = _required_positive_int(table, "max_content_chars", "web_fetch")
     api_key_env = _required_string(table, "api_key_env", "web_fetch")
-    api_key = _required_secret(api_key_env, environment, "web_fetch.api_key_env")
     return WebFetchConfig(
-        api_key=api_key,
-        extract_depth=_required_web_fetch_depth(table),
-        content_format=_required_web_fetch_content_format(table),
-        timeout_seconds=_required_positive_int(table, "timeout_seconds", "web_fetch"),
-        include_images=_required_bool(table, "include_images", "web_fetch"),
-        include_favicon=_required_bool(table, "include_favicon", "web_fetch"),
-        max_content_chars=_required_positive_int(table, "max_content_chars", "web_fetch"),
+        api_key=_required_secret(api_key_env, environment, "web_fetch.api_key_env"),
+        timeout_seconds=timeout, max_content_chars=limit, provider=provider, options=vendor,
     )
 
 
@@ -759,7 +766,7 @@ def _required_int_in_range(
 
 def _required_positive_int(data: dict[str, object], key: str, table_name: str) -> int:
     value = data.get(key)
-    if not isinstance(value, int) or value < 1:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise gear_error(
             "config_value_invalid",
             f"Missing or invalid positive integer value: {table_name}.{key}",

@@ -1,3 +1,5 @@
+from gear_agent.tools.providers.tavily_search import TavilySearchProvider
+from gear_agent.config import TavilySearchOptions, TavilyFetchOptions
 import json
 import unittest
 from typing import Any
@@ -26,7 +28,7 @@ class FakeTavilySearchTransport(TavilySearchTransport):
 
 class WebSearchToolTests(unittest.TestCase):
     def test_schema_exposes_query_only(self) -> None:
-        tool = WebSearchTool(_config(), FakeTavilySearchTransport(_tavily_response()))
+        tool = WebSearchTool(TavilySearchProvider(_config(), FakeTavilySearchTransport(_tavily_response())))
 
         schema = tool.schema()
 
@@ -40,7 +42,7 @@ class WebSearchToolTests(unittest.TestCase):
 
     def test_runs_tavily_search_and_returns_serializable_results(self) -> None:
         transport = FakeTavilySearchTransport(_tavily_response())
-        tool = WebSearchTool(_config(), transport)
+        tool = WebSearchTool(TavilySearchProvider(_config(), transport))
 
         result = tool.run({"query": "OpenAI Responses API latest docs"})
 
@@ -80,7 +82,7 @@ class WebSearchToolTests(unittest.TestCase):
         json.dumps(result)
 
     def test_rejects_missing_query_argument(self) -> None:
-        tool = WebSearchTool(_config(), FakeTavilySearchTransport(_tavily_response()))
+        tool = WebSearchTool(TavilySearchProvider(_config(), FakeTavilySearchTransport(_tavily_response())))
 
         with self.assertRaises(GearError) as error:
             tool.run({})
@@ -89,7 +91,7 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertIn("query", error.exception.message)
 
     def test_rejects_invalid_tavily_response_shape(self) -> None:
-        tool = WebSearchTool(_config(), FakeTavilySearchTransport({"results": "invalid"}))
+        tool = WebSearchTool(TavilySearchProvider(_config(), FakeTavilySearchTransport({"results": "invalid"})))
 
         with self.assertRaises(GearError) as error:
             tool.run({"query": "OpenAI"})
@@ -105,7 +107,7 @@ class WebSearchToolTests(unittest.TestCase):
             True,
             {"status": 401},
         )
-        tool = WebSearchTool(_config(), FakeTavilySearchTransport(transport_error))
+        tool = WebSearchTool(TavilySearchProvider(_config(), FakeTavilySearchTransport(transport_error)))
 
         with self.assertRaises(GearError) as error:
             tool.run({"query": "OpenAI"})
@@ -115,13 +117,12 @@ class WebSearchToolTests(unittest.TestCase):
 
 def _config() -> WebSearchConfig:
     return WebSearchConfig(
-        api_key="tvly-secret",
-        search_depth="basic",
-        max_results=5,
-        timeout_seconds=20,
-        include_answer=True,
-        include_raw_content=False,
-    )
+               api_key="tvly-secret",
+               max_results=5,
+               timeout_seconds=20,
+               provider="tavily",
+               options=TavilySearchOptions(search_depth="basic", include_answer=True, include_raw_content=False),
+           )
 
 
 def _tavily_response() -> dict[str, Any]:
