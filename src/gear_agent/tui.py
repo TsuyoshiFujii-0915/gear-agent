@@ -537,10 +537,12 @@ def _format_web_search_finished(iteration: str, result: dict[str, object]) -> st
 def _format_web_search_result_lines(results: list[dict[object, object]]) -> list[str]:
     lines: list[str] = []
     for index, item in enumerate(results, start=1):
-        title = _required_string(item, "title", "web_search result item")
+        title = item.get("title")
+        if title is not None and not isinstance(title, str):
+            raise ValueError("web_search result item.title must be a string or null.")
         url = _required_string(item, "url", "web_search result item")
         content = _required_string(item, "content", "web_search result item")
-        lines.append(f"  {index}. {_preview_line(title)}")
+        lines.append(f"  {index}. {_preview_line(title) if title is not None else '(title not reported)'}")
         lines.append(f"     {_preview_line(url)}")
         lines.append(f"     {_preview_line(content)}")
     return lines

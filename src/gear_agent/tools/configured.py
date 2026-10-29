@@ -10,8 +10,10 @@ from gear_agent.tools.filesystem_search import GlobTool, GrepTool
 from gear_agent.tools.patch import ApplyPatchTool
 from gear_agent.tools.runtimes import ShellRuntime
 from gear_agent.tools.shell import ShellTool
-from gear_agent.tools.web_fetch import UrllibTavilyFetchTransport, WebFetchTool
-from gear_agent.tools.web_search import UrllibTavilySearchTransport, WebSearchTool
+from gear_agent.tools.web_fetch import WebFetchTool
+from gear_agent.tools.web_search import WebSearchTool
+from gear_agent.tools.providers.factory import build_search_provider, build_fetch_provider
+from gear_agent.tools.providers.urls import resolve_public_host
 
 
 def build_configured_tools(
@@ -25,8 +27,8 @@ def build_configured_tools(
 
     Args:
         config: Parsed tool availability configuration.
-        web_search_config: Parsed Tavily configuration when web search is enabled.
-        web_fetch_config: Parsed Tavily configuration when web fetch is enabled.
+        web_search_config: Parsed provider configuration when web search is enabled.
+        web_fetch_config: Parsed provider configuration when web fetch is enabled.
         workspace: Workspace root for file and shell tools.
         shell_runtime: Runtime used by the shell tool when enabled.
 
@@ -56,7 +58,7 @@ def build_configured_tools(
                 True,
                 {"tool": "web_search"},
             )
-        tools.append(WebSearchTool(web_search_config, UrllibTavilySearchTransport()))
+        tools.append(WebSearchTool(build_search_provider(web_search_config)))
     if config.web_fetch:
         if web_fetch_config is None:
             raise gear_error(
@@ -66,5 +68,5 @@ def build_configured_tools(
                 True,
                 {"tool": "web_fetch"},
             )
-        tools.append(WebFetchTool(web_fetch_config, UrllibTavilyFetchTransport()))
+        tools.append(WebFetchTool(build_fetch_provider(web_fetch_config), resolve_public_host))
     return tools
