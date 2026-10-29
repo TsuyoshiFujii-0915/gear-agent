@@ -106,7 +106,7 @@ def execute_tool(
     """
     if observer is None:
         return registry.run(name, arguments)
-    observer.record('tool_started', {'name': name, 'call_id': call_id})
+    observer.record('tool_started', {'name': name, 'call_id': call_id, **registry.web_observation(name, None)})
     started = perf_counter()
     try:
         result = registry.run(name, arguments)
@@ -114,12 +114,13 @@ def execute_tool(
         observer.record('tool_finished', {
             'name': name, 'call_id': call_id, 'duration_seconds': perf_counter() - started,
             'successful': False, 'error': error_identity(error),
+            **registry.web_observation(name, None),
         })
         raise
     observer.record('tool_finished', {
         'name': name, 'call_id': call_id, 'duration_seconds': perf_counter() - started,
         'successful': 'error' not in result and result.get('exit_code', 0) == 0
                       and not result.get('timed_out', False),
-        'error': None,
+        'error': None, **registry.web_observation(name, result),
     })
     return result

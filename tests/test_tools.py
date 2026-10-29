@@ -1,3 +1,4 @@
+from gear_agent.config import TavilySearchOptions, TavilyFetchOptions
 import json
 import subprocess
 import tempfile
@@ -258,13 +259,12 @@ class ToolTests(unittest.TestCase):
             web_fetch=False,
         )
         web_search_config = WebSearchConfig(
-            api_key="tvly-secret",
-            search_depth="basic",
-            max_results=5,
-            timeout_seconds=20,
-            include_answer=False,
-            include_raw_content=False,
-        )
+                                api_key="tvly-secret",
+                                max_results=5,
+                                timeout_seconds=20,
+                                provider="tavily",
+                                options=TavilySearchOptions(search_depth="basic", include_answer=False, include_raw_content=False),
+                            )
 
         registry = ToolRegistry(
             build_configured_tools(tool_config, web_search_config, None, workspace, runtime)
@@ -287,14 +287,12 @@ class ToolTests(unittest.TestCase):
             web_fetch=True,
         )
         web_fetch_config = WebFetchConfig(
-            api_key="tvly-secret",
-            extract_depth="basic",
-            content_format="markdown",
-            timeout_seconds=20,
-            include_images=False,
-            include_favicon=True,
-            max_content_chars=20_000,
-        )
+                               api_key="tvly-secret",
+                               timeout_seconds=20,
+                               max_content_chars=20_000,
+                               provider="tavily",
+                               options=TavilyFetchOptions(extract_depth="basic", content_format="markdown", include_images=False, include_favicon=True),
+                           )
 
         registry = ToolRegistry(
             build_configured_tools(tool_config, None, web_fetch_config, workspace, runtime)
