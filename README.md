@@ -15,7 +15,7 @@ Codex の中核動作を理解しやすい Python コードとして表現する
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
 - ファイル読み取り、ファイル書き込み、シェル実行、パッチ適用ツール
-- Tavily による Web 検索、Web ページ本文取得ツール
+- Tavily / treg（TinyFish direct）による Web 検索、Web ページ本文取得ツール
 - JSONL によるセッションイベント保存
 
 ## 必要なもの
@@ -184,7 +184,7 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 
 `web_search` と `web_fetch` は独立した `provider` を選択します。
 主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
-`tavily` と `deepseek` です。treg / Exa / Firecrawl は別Issueで追加するため、
+`tavily`、`treg`、`deepseek` です。Exa / Firecrawl は別Issueで追加するため、
 現時点で指定すると設定エラーになります。
 
 ```toml
@@ -235,7 +235,7 @@ Tavily 固有項目をすべて各 `.tavily` テーブルへ移してくださ�
 未知のprovider・キー、欠落した必須項目、不正な型・値域を明示的に拒否します。
 暗黙のプロバイダ切替・再試行・fallbackはありません。
 
-検索の `max_results` は従来どおり 1〜20、`timeout_seconds` は1以上の整数です。
+Tavily 検索の `max_results` は従来どおり 1〜20、`timeout_seconds` は1以上の整数です。
 `search_depth` は `basic` / `advanced` / `fast` / `ultra-fast` を指定します。
 取得の `timeout_seconds` は Tavily Extract の上限に合わせて 1〜60、
 `max_content_chars` は1以上の整数です。`extract_depth` は `basic` / `advanced`、
@@ -253,7 +253,7 @@ Tavily の応答から最終リダイレクト先を確定できないため、`
 空本文・部分失敗・HTTP 200内のerror・不正JSON・本文上限超過はエラーになります。
 無断の要約・切り詰めは行いません。
 
-Web通信はホストから `https://api.tavily.com/search` または `/extract` へ送信します。
+Tavily の Web通信はホストから `https://api.tavily.com/search` または `/extract` へ送信します。
 検索語・取得URLを選択プロバイダへ渡すため、サービス側の料金が発生し得ます。
 `runtime.network` はDocker shellのネットワーク制御であり、Webツール通信とは別です。
 取得先は公開HTTP/HTTPS URLに限定し、userinfo・ローカルホスト・非公開IP・
@@ -339,6 +339,26 @@ Web ツールの通信を止める場合は `[tool]` の該当機能を無効に
 
 認証疎通の状態: モック HTTP で検証済み。作業環境にキーが未設定のため、実アカウントによる
 Search / Fetch の返却内容・品質・速度は未確認です。
+
+### treg / TinyFish direct
+
+検索・取得をそれぞれ `provider = "treg"` に設定できます。Tavily との混在も可能です。
+**TinyFish 個別の provider キーは通常不要ですが、treg token は必要です。**
+`api_key_env = "TREG_TOKEN"` で環境変数を指定し、identity token の組織は
+`[web_search.treg]` / `[web_fetch.treg]` の `org` に明示します。per-org token では
+`org` を省略します。認証は `X-Treg-Token` で、CLI の設定ファイルを自動取得しません。
+
+初版は `tinyfish.web.search` / `tinyfish.web.fetch` の直接 endpoint に固定しています。
+有料 fallback があり得る `treg.web.search` / `treg.web.extract` の routed 経路は
+利用しません。2026-10-29 に公式 catalog の無料価格を確認し、呼び出し前にも毎回
+確認します。費用上限 header は 0 を指定し、報告課金の不一致はエラーにします。
+料金変更や BYOK の vendor 側請求まで含めた永続的な無料保証ではありません。
+未報告課金は `null` のまま保持します。
+
+検索件数はローカル上限で、自動ページング・本文取得はしません。取得は単一 URL の
+Markdown で、TTL（秒）と URL timeout（ミリ秒）を明示設定します。
+利用者の token による認証疎通は未確認です。設定例、送信先、価格確認の制約は
+[treg Web access ガイド](docs/treg-web-access.md) を参照してください。
 
 ## コンテキスト予算と自動コンパクション
 
@@ -539,8 +559,8 @@ uv run gear run --prompt-file task.txt --run-dir ../results/case-001
 | `apply_patch` | ワークスペース内に unified diff パッチを適用します。                      |
 | `glob`        | ワークスペース内のファイルとディレクトリを glob パターンで検索します。    |
 | `grep`        | ワークスペース内の UTF-8 テキストファイルを正規表現で検索します。         |
-| `web_search`  | Tavily Search API で Web 検索します。`web_search` で制御します。          |
-| `web_fetch`   | Tavily Extract API で URL の本文を取得します。`web_fetch` で制御します。  |
+| `web_search`  | 選択した Tavily / treg で Web 検索します。`web_search` で制御します。 |
+| `web_fetch`   | 選択した Tavily / treg で URL の本文を取得します。`web_fetch` で制御します。 |
 
 ファイル操作とパッチ適用は、ワークスペース外のパスを明示的に拒否します。
 ファイル検索ツールも、ワークスペース外のパスを明示的に拒否します。

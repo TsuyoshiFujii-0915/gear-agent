@@ -8,6 +8,9 @@ from gear_agent.config import (
 )
 from gear_agent.errors import gear_error
 from gear_agent.tools.deepseek import DeepSeekTransport
+
+from gear_agent.treg_config import TregSearchOptions, TregFetchOptions
+from gear_agent.tools.providers.treg import TregSearchAdapter, TregFetchAdapter
 from gear_agent.tools.providers.base import WebSearchProvider, WebFetchProvider
 from gear_agent.tools.providers.deepseek import DeepSeekSearchAdapter, DeepSeekFetchAdapter
 from gear_agent.tools.providers.http import MAX_WEB_RESPONSE_BYTES
@@ -24,6 +27,8 @@ def build_search_provider(config: WebSearchConfig) -> WebSearchProvider:
     Returns:
         Search adapter with a scoped production HTTP transport.
     """
+    if config.provider == 'treg' and isinstance(config.options, TregSearchOptions):
+        return TregSearchAdapter(config)
     if config.provider == 'tavily' and isinstance(config.options, TavilySearchOptions):
         return TavilySearchProvider(config, HttpxTavilySearchTransport(None))
     if config.provider == 'deepseek' and isinstance(config.options, DeepSeekSearchOptions):
@@ -40,6 +45,8 @@ def build_fetch_provider(config: WebFetchConfig) -> WebFetchProvider:
     Returns:
         Fetch adapter with a scoped production HTTP transport.
     """
+    if config.provider == 'treg' and isinstance(config.options, TregFetchOptions):
+        return TregFetchAdapter(config)
     if config.provider == 'tavily' and isinstance(config.options, TavilyFetchOptions):
         return TavilyFetchProvider(config, HttpxTavilyFetchTransport(None))
     if config.provider == 'deepseek' and isinstance(config.options, DeepSeekFetchOptions):

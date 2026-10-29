@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import tomllib
 
 from gear_agent.errors import GearError, gear_error
+from gear_agent.treg_config import TregSearchOptions, TregFetchOptions
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
 from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
 
@@ -156,7 +157,7 @@ class WebSearchConfig:
     max_results: int
     timeout_seconds: int
     provider: str
-    options: TavilySearchOptions | DeepSeekSearchOptions
+    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions
 
 
 @dataclass(frozen=True)
@@ -167,7 +168,7 @@ class WebFetchConfig:
     timeout_seconds: int
     max_content_chars: int
     provider: str
-    options: TavilyFetchOptions | DeepSeekFetchOptions
+    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions
 
 
 @dataclass(frozen=True)
@@ -608,7 +609,7 @@ def _web_provider_options(
         return provider, options
     if provider != "tavily":
         raise gear_error(
-            "config_value_invalid", f"Unsupported provider for {name}; expected tavily or deepseek.",
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg or deepseek.",
             "config", True, {"table": name, "key": "provider"},
         )
     _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
@@ -632,6 +633,13 @@ def _load_web_search_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
+    if table.get("provider") == "treg":
+        options = _treg_options(table, "web_search", {"max_results"}, {"org"})
+        treg_options = TregSearchOptions(_treg_org(options, "web_search.treg"))
+        limit = _required_positive_int(table, "max_results", "web_search")
+        timeout = _required_positive_int(table, "timeout_seconds", "web_search")
+        return WebSearchConfig(api_key=_treg_token(table, environment, "web_search"), max_results=limit,
+                               timeout_seconds=timeout, provider="treg", options=treg_options)
     provider, options = _web_provider_options(
         table, "web_search", {"api_key_env", "max_results", "timeout_seconds"},
         {"search_depth", "include_answer", "include_raw_content"},
@@ -666,6 +674,19 @@ def _load_web_fetch_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_fetch")
+    if table.get("provider") == "treg":
+        options = _treg_options(table, "web_fetch", {"max_content_chars"},
+                                {"org", "ttl_seconds", "per_url_timeout_ms"})
+        ttl = options.get("ttl_seconds")
+        if type(ttl) is not int or ttl < 0:
+            raise gear_error("config_value_invalid", "web_fetch.treg.ttl_seconds must be a nonnegative integer.",
+                             "config", True, {"table": "web_fetch.treg", "key": "ttl_seconds"})
+        treg_options = TregFetchOptions(_treg_org(options, "web_fetch.treg"), ttl,
+                                       _required_positive_int(options, "per_url_timeout_ms", "web_fetch.treg"))
+        timeout = _required_positive_int(table, "timeout_seconds", "web_fetch")
+        limit = _required_positive_int(table, "max_content_chars", "web_fetch")
+        return WebFetchConfig(api_key=_treg_token(table, environment, "web_fetch"), timeout_seconds=timeout,
+                              max_content_chars=limit, provider="treg", options=treg_options)
     provider, options = _web_provider_options(
         table, "web_fetch", {"api_key_env", "timeout_seconds", "max_content_chars"},
         {"extract_depth", "content_format", "include_images", "include_favicon"},
@@ -694,6 +715,36 @@ def _load_web_fetch_config(
         api_key=_required_secret(api_key_env, environment, "web_fetch.api_key_env"),
         timeout_seconds=timeout, max_content_chars=limit, provider=provider, options=vendor,
     )
+
+
+def _treg_options(table: dict[str, object], name: str, limits: set[str],
+                  vendor_keys: set[str]) -> dict[str, object]:
+    _reject_unknown_keys(table, name, {"provider", "api_key_env", "timeout_seconds", "treg"} | limits)
+    options = _required_table(table, "treg")
+    _reject_unknown_keys(options, f"{name}.treg", vendor_keys)
+    return options
+
+
+def _treg_org(options: dict[str, object], name: str) -> str | None:
+    # Per-org tokens do not require an organization header.
+    if "org" not in options:
+        return None
+    value = _required_string(options, "org", name)
+    _validate_treg_header(value, f"{name}.org")
+    return value
+
+
+def _treg_token(table: dict[str, object], environment: Mapping[str, str], name: str) -> str:
+    env_name = _required_string(table, "api_key_env", name)
+    value = _required_secret(env_name, environment, f"{name}.api_key_env")
+    _validate_treg_header(value, f"{name}.api_key_env")
+    return value
+
+
+def _validate_treg_header(value: str, origin: str) -> None:
+    if not value or any(ord(char) < 33 or ord(char) > 126 for char in value):
+        raise gear_error("config_value_invalid", f"{origin} must resolve to nonempty ASCII without whitespace.",
+                         "config", True, {"origin": origin})
 
 
 def _required_secret(
