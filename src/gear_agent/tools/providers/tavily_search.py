@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
-from typing import Any, cast
+from typing import Any
 
-from gear_agent.config import TavilySearchOptions, WebSearchConfig
+from gear_agent.config import WebSearchConfig, TavilySearchOptions
 from gear_agent.errors import GearError, gear_error
 from gear_agent.tools.providers.base import ProviderResult, WebUsage
 from gear_agent.tools.providers.http import WebHttpClient, post_web_json
@@ -61,7 +61,11 @@ class TavilySearchProvider:
     display_name = "Tavily Search"
 
     def __init__(self, config: WebSearchConfig, transport: TavilySearchTransport) -> None:
+        if not isinstance(config.options, TavilySearchOptions):
+            raise gear_error("tool_config_invalid", "Tavily search requires Tavily search options.",
+                             "tool_config", True, {})
         self._config = config
+        self._options = config.options
         self._transport = transport
 
     @property
@@ -69,13 +73,12 @@ class TavilySearchProvider:
         return self._config.max_results
 
     def search(self, query: str) -> ProviderResult:
-        options = cast(TavilySearchOptions, self._config.options)
         payload: dict[str, object] = {
             "query": query,
-            "search_depth": options.search_depth,
+            "search_depth": self._options.search_depth,
             "max_results": self._config.max_results,
-            "include_answer": options.include_answer,
-            "include_raw_content": options.include_raw_content,
+            "include_answer": self._options.include_answer,
+            "include_raw_content": self._options.include_raw_content,
             "include_usage": True,
         }
         response = self._transport.search(

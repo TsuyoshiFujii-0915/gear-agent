@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import math
 from typing import Literal, Protocol
 
@@ -20,6 +20,19 @@ class WebUsage:
                 or self.value < 0):
             raise gear_error('web_usage_invalid', 'Provider usage requires a supported unit and finite nonnegative value.',
                              'web_provider', True, {})
+
+
+@dataclass(frozen=True)
+class WebCostEstimate(WebUsage):
+    """Provider-reported USD estimate, distinct from billed usage."""
+
+    unit: Literal['USD']
+    kind: Literal['estimate'] = field(default='estimate', init=False)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.unit != 'USD':
+            raise gear_error('web_usage_invalid', 'Web cost estimates require USD.', 'web_provider', True, {})
 
 
 @dataclass(frozen=True)

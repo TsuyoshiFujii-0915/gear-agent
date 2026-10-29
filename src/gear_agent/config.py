@@ -11,9 +11,13 @@ from gear_agent.errors import GearError, gear_error
 from gear_agent.treg_config import TregSearchOptions, TregFetchOptions
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
 from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
+from gear_agent.exa_config import (
+    ExaFetchOptions, ExaSearchOptions, load_exa_fetch_options, load_exa_search_options,
+)
 
 
 DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
+MAX_WEB_RESPONSE_BYTES = 8 * 1024 * 1024
 
 DEFAULT_CONFIG_TEXT = """[model]
 url = "http://localhost:1234/v1/responses"
@@ -175,7 +179,7 @@ class WebSearchConfig:
     max_results: int
     timeout_seconds: int
     provider: str
-    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions | FirecrawlSearchOptions
+    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions | FirecrawlSearchOptions | ExaSearchOptions
 
 
 @dataclass(frozen=True)
@@ -186,7 +190,24 @@ class WebFetchConfig:
     timeout_seconds: int
     max_content_chars: int
     provider: str
-    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions | FirecrawlFetchOptions
+    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions | FirecrawlFetchOptions | ExaFetchOptions
+
+
+@dataclass(frozen=True)
+class ExaSearchConfig(WebSearchConfig):
+    """Common search settings with Exa's explicitly required content limits."""
+
+    options: ExaSearchOptions
+    max_content_chars: int
+    max_response_bytes: int
+
+
+@dataclass(frozen=True)
+class ExaFetchConfig(WebFetchConfig):
+    """Common fetch settings with Exa's explicitly required response limit."""
+
+    options: ExaFetchOptions
+    max_response_bytes: int
 
 
 @dataclass(frozen=True)
@@ -627,7 +648,7 @@ def _web_provider_options(
         return provider, options
     if provider != "tavily":
         raise gear_error(
-            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg, deepseek or firecrawl.",
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg, deepseek, firecrawl or exa.",
             "config", True, {"table": name, "key": "provider"},
         )
     _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
@@ -651,6 +672,8 @@ def _load_web_search_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
+    if table.get("provider") == "exa":
+        return _load_exa_search_config(table, environment)
     if table.get("provider") == "firecrawl":
         return _load_firecrawl_search_config(table, environment)
     if table.get("provider") == "treg":
@@ -694,6 +717,8 @@ def _load_web_fetch_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_fetch")
+    if table.get("provider") == "exa":
+        return _load_exa_fetch_config(table, environment)
     if table.get("provider") == "firecrawl":
         return _load_firecrawl_fetch_config(table, environment)
     if table.get("provider") == "treg":
@@ -736,6 +761,39 @@ def _load_web_fetch_config(
     return WebFetchConfig(
         api_key=_required_secret(api_key_env, environment, "web_fetch.api_key_env"),
         timeout_seconds=timeout, max_content_chars=limit, provider=provider, options=vendor,
+    )
+
+
+def _load_exa_search_config(table: dict[str, object], environment: Mapping[str, str]) -> ExaSearchConfig:
+    origin = "web_search"
+    _reject_unknown_keys(table, origin, {"provider", "api_key_env", "timeout_seconds", "max_results",
+                                         "max_content_chars", "max_response_bytes", "exa"})
+    options = load_exa_search_options(_required_table(table, "exa"))
+    timeout = _required_positive_int(table, "timeout_seconds", origin)
+    count = _required_int_in_range(table, "max_results", origin, 1, 100)
+    content_limit = _required_positive_int(table, "max_content_chars", origin)
+    response_limit = _required_int_in_range(table, "max_response_bytes", origin, 1, MAX_WEB_RESPONSE_BYTES)
+    api_key_env = _required_string(table, "api_key_env", origin)
+    return ExaSearchConfig(
+        api_key=_required_secret(api_key_env, environment, f"{origin}.api_key_env"),
+        max_results=count, timeout_seconds=timeout, provider="exa", options=options,
+        max_content_chars=content_limit, max_response_bytes=response_limit,
+    )
+
+
+def _load_exa_fetch_config(table: dict[str, object], environment: Mapping[str, str]) -> ExaFetchConfig:
+    origin = "web_fetch"
+    _reject_unknown_keys(table, origin, {"provider", "api_key_env", "timeout_seconds", "max_content_chars",
+                                         "max_response_bytes", "exa"})
+    timeout = _required_positive_int(table, "timeout_seconds", origin)
+    options = load_exa_fetch_options(_required_table(table, "exa"), timeout)
+    content_limit = _required_positive_int(table, "max_content_chars", origin)
+    response_limit = _required_int_in_range(table, "max_response_bytes", origin, 1, MAX_WEB_RESPONSE_BYTES)
+    api_key_env = _required_string(table, "api_key_env", origin)
+    return ExaFetchConfig(
+        api_key=_required_secret(api_key_env, environment, f"{origin}.api_key_env"),
+        timeout_seconds=timeout, provider="exa", options=options,
+        max_content_chars=content_limit, max_response_bytes=response_limit,
     )
 
 

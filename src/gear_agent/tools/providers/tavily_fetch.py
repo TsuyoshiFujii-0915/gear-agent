@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import math
-from typing import Any, cast
+from typing import Any
 
-from gear_agent.config import TavilyFetchOptions, WebFetchConfig
+from gear_agent.config import WebFetchConfig, TavilyFetchOptions
 from gear_agent.errors import GearError, gear_error
 from gear_agent.tools.providers.base import ProviderResult, WebUsage
 from gear_agent.tools.providers.http import WebHttpClient, post_web_json
@@ -61,7 +61,11 @@ class TavilyFetchProvider:
     display_name = "Tavily Extract"
 
     def __init__(self, config: WebFetchConfig, transport: TavilyFetchTransport) -> None:
+        if not isinstance(config.options, TavilyFetchOptions):
+            raise gear_error("tool_config_invalid", "Tavily fetch requires Tavily fetch options.",
+                             "tool_config", True, {})
         self._config = config
+        self._options = config.options
         self._transport = transport
 
     @property
@@ -69,13 +73,12 @@ class TavilyFetchProvider:
         return self._config.max_content_chars
 
     def fetch(self, url: str) -> ProviderResult:
-        options = cast(TavilyFetchOptions, self._config.options)
         payload: dict[str, object] = {
             "urls": [url],
-            "extract_depth": options.extract_depth,
-            "format": options.content_format,
-            "include_images": options.include_images,
-            "include_favicon": options.include_favicon,
+            "extract_depth": self._options.extract_depth,
+            "format": self._options.content_format,
+            "include_images": self._options.include_images,
+            "include_favicon": self._options.include_favicon,
             "timeout": self._config.timeout_seconds,
             "include_usage": True,
         }

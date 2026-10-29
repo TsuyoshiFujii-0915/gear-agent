@@ -6,9 +6,7 @@ from typing import Any
 import httpx
 
 from gear_agent.errors import GearError, gear_error
-
-
-MAX_WEB_RESPONSE_BYTES = 8 * 1024 * 1024
+from gear_agent.config import MAX_WEB_RESPONSE_BYTES
 
 
 class WebHttpClient:
@@ -40,13 +38,33 @@ class WebHttpClient:
         Raises:
             GearError: On HTTP, size, encoding, network or JSON failure.
         """
+        return self.post_json_with_headers(url, {'Authorization': f'Bearer {api_key}'}, payload,
+                                           timeout_seconds, origin, error_prefix)
+
+    def post_json_with_headers(
+        self, url: str, headers: dict[str, str], payload: dict[str, object], timeout_seconds: int,
+        origin: str, error_prefix: str,
+    ) -> dict[str, Any]:
+        """Posts with adapter-owned authentication through the shared HTTP policy.
+
+        Args:
+            url: Fixed provider API URL.
+            headers: Adapter authentication headers, never model arguments.
+            payload: Vendor JSON body.
+            timeout_seconds: Explicit HTTP timeout.
+            origin: Tool identity for recoverable errors.
+            error_prefix: Adapter error namespace.
+
+        Returns:
+            Bounded JSON response object.
+        """
         def failure(category: str, message: str, details: dict[str, object]) -> GearError:
             return gear_error(f'{error_prefix}_{category}', message, origin, True, details)
 
         try:
             request = self._client.build_request(
                 'POST', url, json=payload,
-                headers={'Authorization': f'Bearer {api_key}', 'Accept-Encoding': 'identity'},
+                headers={**headers, 'Accept-Encoding': 'identity'},
                 timeout=timeout_seconds,
             )
             response = self._client.send(request, stream=True, follow_redirects=False)
@@ -78,7 +96,8 @@ class WebHttpClient:
         except httpx.HTTPError:
             raise failure('http_request_failed', 'Web provider HTTP request failed.', {}) from None
         try:
-            parsed = json.loads(body.decode('utf-8'), parse_constant=_reject_json_constant)
+            parsed = json.loads(body.decode('utf-8'), parse_constant=_reject_json_constant,
+                                object_pairs_hook=_unique_object)
         except (ValueError, RecursionError):
             raise failure('json_parse_failed', 'Web provider returned invalid JSON.', {}) from None
         if not isinstance(parsed, dict):
@@ -88,6 +107,15 @@ class WebHttpClient:
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError('Nonfinite JSON number is not supported.')
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('Duplicate JSON key.')
+        result[key] = value
+    return result
 
 
 def post_web_json(

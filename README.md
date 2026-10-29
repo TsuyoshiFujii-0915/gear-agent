@@ -15,7 +15,7 @@ Codex の中核動作を理解しやすい Python コードとして表現する
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
 - ファイル読み取り、ファイル書き込み、シェル実行、パッチ適用ツール
-- Tavily / treg（TinyFish direct）/ DeepSeek / Firecrawl による Web 検索、Web ページ本文取得ツール
+- Tavily / treg（TinyFish direct）/ DeepSeek / Firecrawl / Exa を独立に選べる Web 検索、Web ページ本文取得ツール
 - JSONL によるセッションイベント保存
 
 ## 必要なもの
@@ -184,8 +184,8 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 
 `web_search` と `web_fetch` は独立した `provider` を選択します。
 主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
-`tavily`、`treg`、`deepseek`、`firecrawl` です。Exa は別Issueで追加するため、
-現時点で指定すると設定エラーになります。
+`tavily`、`treg`、`deepseek`、`firecrawl`、`exa` です。これら以外の provider を
+指定すると設定エラーになります。
 
 ```toml
 [tool]
@@ -248,13 +248,14 @@ API仕様は [Tavily Search](https://docs.tavily.com/documentation/api-reference
 取得の `content` はページ本文であり、生成された要約を本文として扱いません。
 本文は外部データとしてツール結果に保存され、system/developer指示へ昇格しません。
 取得結果の `requested_url` は元の入力、`url` はプロバイダが報告したURLです。
-Tavily の応答から最終リダイレクト先を確定できないため、`final_url` は `null` です。
+Tavily / Exa の応答から最終リダイレクト先を確定できないため、`final_url` は `null` です。
 未報告の title / score / usage は `null` または欠落で表し、検索0件は正常な空配列です。
 空本文・部分失敗・HTTP 200内のerror・不正JSON・本文上限超過はエラーになります。
 無断の要約・切り詰めは行いません。
 
 Web通信はホストから、Tavily 選択時は `https://api.tavily.com/search` または `/extract`、
 Firecrawl 選択時は `https://api.firecrawl.dev/v2/search` または `/v2/scrape` へ送信します。
+その他のプロバイダの送信先は、下記の各設定説明に記載しています。
 検索語・取得URLを選択プロバイダへ渡すため、サービス側の料金が発生し得ます。
 `runtime.network` はDocker shellのネットワーク制御であり、Webツール通信とは別です。
 取得先は公開HTTP/HTTPS URLに限定し、userinfo・ローカルホスト・非公開IP・
@@ -269,6 +270,7 @@ Firecrawl 選択時は `https://api.firecrawl.dev/v2/search` または `/v2/scra
 usageは `{"unit": "credits", "value": 1}` のような配列で、未報告時は空配列です。
 Tavily の `credits` は従来のフィールドにも残します。scoreはprovider固有の値であり、
 共通確率として比較しません。credits / USD / tokensを合算・推定しません。
+Exa の報告された USD 推定費用には `kind = "estimate"` を付け、実請求の usage と区別します。
 headlessのrun metadataには有効providerを、trace/metricsには呼出しごとのprovider・
 報告usageの単位・処理時間・成否を記録します。観測メトリクスにはqueryやページ本文を
 コピーしません。APIキーはrepr・診断・run metadata・成果物から除外／秘匿します。
@@ -277,6 +279,104 @@ JSONL・Jev・要約・再開は既存のツール結果契約を利用します
 設計判断は [ADR 0023](docs/decisions/0023-select-web-providers-independently.md) と
 [ADR 0024](docs/decisions/0024-bound-web-provider-http-and-url-inputs.md) に記録しています。
 認証付きlive検証は、各プロバイダの実装Issueで別途実施します。
+
+### Exa Search / Contents
+
+`[web_search]` と `[web_fetch]` の `provider` は独立に選択できます。
+未指定は既存設定との互換性のため Tavily です。`provider = "tavily"` の明示も可能です。
+検索だけ Exa、取得だけ Tavily、またはその逆でも、主モデルの設定を変更する必要はありません。
+`gear init` は従来どおり Web ツールを無効にします。
+
+[Exa Dashboard](https://dashboard.exa.ai/) で取得した API キーを、`api_key_env` に指定する
+環境変数（例: `EXA_API_KEY`）へ設定してください。キーを TOML、チャット、Issue、PR に
+貼り付けないでください。主モデルのキーとは別に解決し、無効な機能のキーは要求しません。
+
+既存の `[tool]` で `web_search = true` / `web_fetch = true` を指定し、対応する設定テーブルを
+以下へ置き換えます。Tavily 専用項目を残したり、同じテーブルを重複させたりしないでください。
+
+```toml
+[web_search]
+provider = "exa"
+api_key_env = "EXA_API_KEY"
+max_results = 5
+timeout_seconds = 20
+max_content_chars = 20000
+max_response_bytes = 1000000
+
+[web_search.exa]
+search_type = "auto"
+content = "highlights"
+include_domains = []
+exclude_domains = []
+
+[web_fetch]
+provider = "exa"
+api_key_env = "EXA_API_KEY"
+timeout_seconds = 20
+max_content_chars = 20000
+max_response_bytes = 1000000
+
+[web_fetch.exa]
+livecrawl_timeout_ms = 10000
+# Optional: omit to use Exa's default cache policy.
+max_age_hours = 24
+```
+
+Exa 固有項目は `.exa` サブテーブルに置きます。検索の `search_type` と `content` の省略時は
+それぞれ `auto` と `highlights` です。初版の検索 type は `auto` のみ対応し、件数は 1〜100 件です。
+2026-10-29 に確認した仕様では `fast` / `instant` は legacy 扱いです。本実装ではこれらを含む
+未対応 type を設定エラーにし、別 type へ置換しません。詳細は [Search 仕様](https://exa.ai/docs/reference/search) を参照してください。
+
+`content = "highlights"` は短い抜粋を要求します。`content = "text"` は
+`contents.text.maxCharacters` に `max_content_chars` を指定して本文を要求します。
+結果の `content` は抜粋、`raw_content` は本文で、未報告は `null` です。
+`provider_metadata.exa` 内の `highlights` と生成 `summary` も別々に保持し、本文として扱いません。
+抜粋や title の欠落、検索 0 件は正常です。受信後の無断の切り詰めや再要約は行いません。
+
+`include_domains` / `exclude_domains` は明示的な配列で、空配列は絞り込みなしです。
+ホスト名、`*.example.com`、`example.com/docs` 形式を各 1200 件まで指定できます。
+query はそのまま送信し、他社と同じ `site:` 演算子互換性は保証しません。
+日付フィルター、deep 系、生成 Answer、サイト全体の subpages 自動取得は公開していません。
+
+Contents は検索を前提とせず、単一 URL と `text: true` を送信します。結果は Exa が抽出した
+テキストであり、HTML や Markdown への変換はしません。`requested_url`、返却された `url`、
+provider の `id` を区別し、URL 単位の失敗、対応不明、本文欠落・空白・上限超過をエラーにします。
+返却形式と鮮度の詳細は [Contents 仕様](https://exa.ai/docs/reference/get-contents) を参照してください。
+
+| `max_age_hours` | 意味 |
+| --- | --- |
+| 省略 | Exa の既定: キャッシュがあれば利用し、なければ live 取得 |
+| `-1` | cache-only |
+| `0` | 新規取得を要求 |
+| `1`〜`720` | 許容キャッシュ年齢（時間） |
+
+成功は「今この瞬間のページ」を意味しません。`provider_metadata.exa.source` は応答で
+報告された値のみを保存し、未報告は `null` です。deprecated な `livecrawl` は送りません。
+`livecrawl_timeout_ms` は必須のミリ秒値（1〜90000）で、HTTP の `timeout_seconds` を
+ミリ秒換算した値より小さくします。HTTP timeout は接続・読み取り等の待機上限であり、総実行時間ではありません。
+
+件数、検索 type、content 要求は費用に影響し得ます。[料金](https://exa.ai/pricing) と
+Dashboard の残高を利用時点で確認してください。応答の `costDollars` は
+`provider_metadata.exa.estimated_cost_dollars` に provider 報告の **USD 推定値** として保存します。
+実請求、credits、主モデルの tokens とは合算せず、未報告は `null` です。
+報告された total がある場合は、共通の `usage` に
+`{"unit": "USD", "value": 0.001, "kind": "estimate"}` のような形で記録し、trace/metrics にも渡します。
+total が未報告なら空配列とし、内訳の合算や 0 での補完はしません。
+
+通信先は `https://api.exa.ai/search` / `contents` です。ホスト側の通信であり、Docker shell の
+`runtime.network` とは独立しています。取得 URL は http/https に限定し、userinfo、localhost、
+非公開 IP リテラル等を拒否します。共通の URL 検証で DNS 解決も行い、非公開 IP へ解決される
+ホストや解決失敗を送信前に拒否します。実際のページ取得は Exa が行うため、provider 側の
+DNS 再解決・redirect 先の検証は Exa にも依存します。
+API 認証リクエストの redirect、自動 retry、別 provider への fallback は行いません。
+HTTP 応答は `max_response_bytes` 以下に制限し、圧縮応答を拒否して展開時の過大な受信も防ぎます。
+本文上限は正の整数、受信上限は 1〜8388608 バイト（共通の 8 MiB 上限以下）が必須です。
+重複 JSON キーは曖昧な応答として拒否します。上流の生エラー本文は履歴や主モデルへ渡しません。
+
+実装検証はモック HTTP で実施しました。`EXA_API_KEY` 未設定のため、認証付きの実 API 疎通、
+検索品質、実費用は未確認です。Exa は #31 の共通ツール・provider factory・HTTP・URL 検証・観測基盤を利用します。
+統合方針は [ADR 0027](docs/decisions/0027-integrate-exa-with-web-provider-foundation.md)、
+推定費用の扱いは [ADR 0028](docs/decisions/0028-distinguish-web-cost-estimates-from-usage.md) に記載しています。
 
 ### Firecrawl Cloud v2
 
@@ -639,8 +739,8 @@ uv run gear run --prompt-file task.txt --run-dir ../results/case-001
 | `apply_patch` | ワークスペース内に unified diff パッチを適用します。                      |
 | `glob`        | ワークスペース内のファイルとディレクトリを glob パターンで検索します。    |
 | `grep`        | ワークスペース内の UTF-8 テキストファイルを正規表現で検索します。         |
-| `web_search`  | 選択した Tavily / treg / DeepSeek / Firecrawl で Web 検索します。`web_search` で制御します。 |
-| `web_fetch`   | 選択した Tavily / treg / DeepSeek / Firecrawl で URL 本文を取得します。`web_fetch` で制御します。 |
+| `web_search`  | 選択した Tavily / treg / DeepSeek / Firecrawl / Exa で Web 検索します。`web_search` で制御します。 |
+| `web_fetch`   | 選択した Tavily / treg / DeepSeek / Firecrawl / Exa で URL 本文を取得します。`web_fetch` で制御します。 |
 
 ファイル操作とパッチ適用は、ワークスペース外のパスを明示的に拒否します。
 ファイル検索ツールも、ワークスペース外のパスを明示的に拒否します。

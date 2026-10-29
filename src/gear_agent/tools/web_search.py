@@ -45,8 +45,9 @@ class WebSearchTool(Tool):
                              self.name, True, {})
         for item in results:
             if (not isinstance(item, dict) or not isinstance(item.get('url'), str)
-                    or not isinstance(item.get('content'), str)
+                    or 'content' not in item
+                    or (item['content'] is not None and not isinstance(item['content'], str))
                     or (item.get('title') is not None and not isinstance(item['title'], str))):
-                raise gear_error('web_search_response_invalid', 'Search result requires url/content and a nullable title.',
+                raise gear_error('web_search_response_invalid', 'Search result requires url and nullable content/title.',
                                  self.name, True, {})
         return result.serialize(self.provider_name)
