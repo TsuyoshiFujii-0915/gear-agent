@@ -11,11 +11,11 @@ from gear_agent.errors import gear_error
 class WebUsage:
     """A provider-reported quantity; units are never converted or summed."""
 
-    unit: Literal['credits', 'USD', 'tokens']
+    unit: Literal['credits', 'USD', 'micro_USD', 'tokens']
     value: int | float
 
     def __post_init__(self) -> None:
-        if (self.unit not in {'credits', 'USD', 'tokens'} or isinstance(self.value, bool)
+        if (self.unit not in {'credits', 'USD', 'micro_USD', 'tokens'} or isinstance(self.value, bool)
                 or not isinstance(self.value, (int, float)) or not math.isfinite(self.value)
                 or self.value < 0):
             raise gear_error('web_usage_invalid', 'Provider usage requires a supported unit and finite nonnegative value.',
@@ -52,13 +52,13 @@ class ProviderResult:
             Canonical tool payload suitable for JSONL and model history.
         """
         metadata = self.data.get('provider_metadata', {})
-        if not isinstance(metadata, dict) or not isinstance(metadata.get(provider, {}), dict):
-            raise gear_error('web_metadata_invalid', 'Provider metadata must contain namespaced objects.',
-                             'web_provider', True, {})
+        if not isinstance(metadata, dict):
+            raise gear_error('web_metadata_invalid', 'Provider metadata must be an object.', 'web_provider', True, {})
+        selected = metadata.get(provider, {})
+        if not isinstance(selected, dict):
+            raise gear_error('web_metadata_invalid', 'Namespaced provider metadata must be an object.', 'web_provider', True, {})
         return {**self.data, 'provider': provider,
-                'provider_metadata': {**metadata, provider: {
-                    **metadata.get(provider, {}), 'usage': [asdict(item) for item in self.usage],
-                }}}
+                'provider_metadata': {**metadata, provider: {**selected, 'usage': [asdict(item) for item in self.usage]}}}
 
 
 class WebSearchProvider(Protocol):
