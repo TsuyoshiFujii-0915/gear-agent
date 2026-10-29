@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import tomllib
 
 from gear_agent.errors import GearError, gear_error
+from gear_agent.treg_config import TregSearchOptions, TregFetchOptions
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
 from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
 
@@ -153,6 +154,20 @@ class FirecrawlFetchOptions:
 
 
 @dataclass(frozen=True)
+class DeepSeekSearchOptions:
+    """Whether DeepSeek search should also retrieve page bodies."""
+
+    need_content: bool
+
+
+@dataclass(frozen=True)
+class DeepSeekFetchOptions:
+    """The explicitly supported DeepSeek extraction format."""
+
+    content_format: str
+
+
+@dataclass(frozen=True)
 class WebSearchConfig:
     """Independent search provider settings with an environment-resolved secret."""
 
@@ -160,7 +175,7 @@ class WebSearchConfig:
     max_results: int
     timeout_seconds: int
     provider: str
-    options: TavilySearchOptions | FirecrawlSearchOptions
+    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions | FirecrawlSearchOptions
 
 
 @dataclass(frozen=True)
@@ -171,7 +186,7 @@ class WebFetchConfig:
     timeout_seconds: int
     max_content_chars: int
     provider: str
-    options: TavilyFetchOptions | FirecrawlFetchOptions
+    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions | FirecrawlFetchOptions
 
 
 @dataclass(frozen=True)
@@ -604,9 +619,15 @@ def _web_provider_options(
 ) -> tuple[str, dict[str, object]]:
     # Absence explicitly selects Tavily for legacy configuration compatibility.
     provider = _required_string(table, "provider", name) if "provider" in table else "tavily"
+    if provider == "deepseek":
+        _reject_unknown_keys(table, name, common_keys | {"provider", "deepseek"})
+        options = _required_table(table, "deepseek") if "deepseek" in table else {}
+        keys = {"need_content"} if name == "web_search" else {"content_format"}
+        _reject_unknown_keys(options, f"{name}.deepseek", keys)
+        return provider, options
     if provider != "tavily":
         raise gear_error(
-            "config_value_invalid", f"Unsupported provider for {name}; expected tavily.",
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg, deepseek or firecrawl.",
             "config", True, {"table": name, "key": "provider"},
         )
     _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
@@ -632,16 +653,31 @@ def _load_web_search_config(
     table = _required_table(raw_data, "web_search")
     if table.get("provider") == "firecrawl":
         return _load_firecrawl_search_config(table, environment)
+    if table.get("provider") == "treg":
+        options = _treg_options(table, "web_search", {"max_results"}, {"org"})
+        treg_options = TregSearchOptions(_treg_org(options, "web_search.treg"))
+        limit = _required_positive_int(table, "max_results", "web_search")
+        timeout = _required_positive_int(table, "timeout_seconds", "web_search")
+        return WebSearchConfig(api_key=_treg_token(table, environment, "web_search"), max_results=limit,
+                               timeout_seconds=timeout, provider="treg", options=treg_options)
     provider, options = _web_provider_options(
         table, "web_search", {"api_key_env", "max_results", "timeout_seconds"},
         {"search_depth", "include_answer", "include_raw_content"},
     )
-    vendor = TavilySearchOptions(
-        search_depth=_required_web_search_depth(options),
-        include_answer=_required_bool(options, "include_answer", "web_search"),
-        include_raw_content=_required_bool(options, "include_raw_content", "web_search"),
-    )
-    max_results = _required_int_in_range(table, "max_results", "web_search", 1, 20)
+    vendor: TavilySearchOptions | DeepSeekSearchOptions
+    if provider == "deepseek":
+        # DeepSeek's initial policy deliberately leaves body retrieval to web_fetch.
+        need_content = (_required_bool(options, "need_content", "web_search.deepseek")
+                        if "need_content" in options else False)
+        vendor = DeepSeekSearchOptions(need_content)
+        max_results = _required_int_in_range(table, "max_results", "web_search", 1, 50)
+    else:
+        vendor = TavilySearchOptions(
+            search_depth=_required_web_search_depth(options),
+            include_answer=_required_bool(options, "include_answer", "web_search"),
+            include_raw_content=_required_bool(options, "include_raw_content", "web_search"),
+        )
+        max_results = _required_int_in_range(table, "max_results", "web_search", 1, 20)
     timeout = _required_positive_int(table, "timeout_seconds", "web_search")
     api_key_env = _required_string(table, "api_key_env", "web_search")
     return WebSearchConfig(
@@ -660,17 +696,41 @@ def _load_web_fetch_config(
     table = _required_table(raw_data, "web_fetch")
     if table.get("provider") == "firecrawl":
         return _load_firecrawl_fetch_config(table, environment)
+    if table.get("provider") == "treg":
+        options = _treg_options(table, "web_fetch", {"max_content_chars"},
+                                {"org", "ttl_seconds", "per_url_timeout_ms"})
+        ttl = options.get("ttl_seconds")
+        if type(ttl) is not int or ttl < 0:
+            raise gear_error("config_value_invalid", "web_fetch.treg.ttl_seconds must be a nonnegative integer.",
+                             "config", True, {"table": "web_fetch.treg", "key": "ttl_seconds"})
+        treg_options = TregFetchOptions(_treg_org(options, "web_fetch.treg"), ttl,
+                                       _required_positive_int(options, "per_url_timeout_ms", "web_fetch.treg"))
+        timeout = _required_positive_int(table, "timeout_seconds", "web_fetch")
+        limit = _required_positive_int(table, "max_content_chars", "web_fetch")
+        return WebFetchConfig(api_key=_treg_token(table, environment, "web_fetch"), timeout_seconds=timeout,
+                              max_content_chars=limit, provider="treg", options=treg_options)
     provider, options = _web_provider_options(
         table, "web_fetch", {"api_key_env", "timeout_seconds", "max_content_chars"},
         {"extract_depth", "content_format", "include_images", "include_favicon"},
     )
-    vendor = TavilyFetchOptions(
-        extract_depth=_required_web_fetch_depth(options),
-        content_format=_required_web_fetch_content_format(options),
-        include_images=_required_bool(options, "include_images", "web_fetch"),
-        include_favicon=_required_bool(options, "include_favicon", "web_fetch"),
-    )
-    timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 1, 60)
+    vendor: TavilyFetchOptions | DeepSeekFetchOptions
+    if provider == "deepseek":
+        # Markdown is the only format provided by DeepSeek's standalone Fetch API.
+        content_format = (_required_string(options, "content_format", "web_fetch.deepseek")
+                          if "content_format" in options else "markdown")
+        if content_format != "markdown":
+            raise gear_error("config_value_invalid", "DeepSeek fetch supports only markdown.",
+                             "config", True, {"table": "web_fetch.deepseek", "key": "content_format"})
+        vendor = DeepSeekFetchOptions(content_format)
+        timeout = _required_positive_int(table, "timeout_seconds", "web_fetch")
+    else:
+        vendor = TavilyFetchOptions(
+            extract_depth=_required_web_fetch_depth(options),
+            content_format=_required_web_fetch_content_format(options),
+            include_images=_required_bool(options, "include_images", "web_fetch"),
+            include_favicon=_required_bool(options, "include_favicon", "web_fetch"),
+        )
+        timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 1, 60)
     limit = _required_positive_int(table, "max_content_chars", "web_fetch")
     api_key_env = _required_string(table, "api_key_env", "web_fetch")
     return WebFetchConfig(
@@ -764,6 +824,36 @@ def _required_nonnegative_int(data: dict[str, object], key: str, origin: str) ->
             "config", True, {"table": origin, "key": key},
         )
     return value
+
+
+def _treg_options(table: dict[str, object], name: str, limits: set[str],
+                  vendor_keys: set[str]) -> dict[str, object]:
+    _reject_unknown_keys(table, name, {"provider", "api_key_env", "timeout_seconds", "treg"} | limits)
+    options = _required_table(table, "treg")
+    _reject_unknown_keys(options, f"{name}.treg", vendor_keys)
+    return options
+
+
+def _treg_org(options: dict[str, object], name: str) -> str | None:
+    # Per-org tokens do not require an organization header.
+    if "org" not in options:
+        return None
+    value = _required_string(options, "org", name)
+    _validate_treg_header(value, f"{name}.org")
+    return value
+
+
+def _treg_token(table: dict[str, object], environment: Mapping[str, str], name: str) -> str:
+    env_name = _required_string(table, "api_key_env", name)
+    value = _required_secret(env_name, environment, f"{name}.api_key_env")
+    _validate_treg_header(value, f"{name}.api_key_env")
+    return value
+
+
+def _validate_treg_header(value: str, origin: str) -> None:
+    if not value or any(ord(char) < 33 or ord(char) > 126 for char in value):
+        raise gear_error("config_value_invalid", f"{origin} must resolve to nonempty ASCII without whitespace.",
+                         "config", True, {"origin": origin})
 
 
 def _required_secret(

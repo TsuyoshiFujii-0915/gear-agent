@@ -13,6 +13,7 @@ from gear_agent.tools.shell import ShellTool
 from gear_agent.tools.web_fetch import WebFetchTool
 from gear_agent.tools.web_search import WebSearchTool
 from gear_agent.tools.providers.factory import build_search_provider, build_fetch_provider
+from gear_agent.tools.providers.deepseek import DeepSeekSearchTool, DeepSeekFetchTool
 from gear_agent.tools.providers.urls import resolve_public_host
 
 
@@ -58,7 +59,9 @@ def build_configured_tools(
                 True,
                 {"tool": "web_search"},
             )
-        tools.append(WebSearchTool(build_search_provider(web_search_config)))
+        search_provider = build_search_provider(web_search_config)
+        search_tool = DeepSeekSearchTool if web_search_config.provider == "deepseek" else WebSearchTool
+        tools.append(search_tool(search_provider))
     if config.web_fetch:
         if web_fetch_config is None:
             raise gear_error(
@@ -68,5 +71,7 @@ def build_configured_tools(
                 True,
                 {"tool": "web_fetch"},
             )
-        tools.append(WebFetchTool(build_fetch_provider(web_fetch_config), resolve_public_host))
+        fetch_provider = build_fetch_provider(web_fetch_config)
+        fetch_tool = DeepSeekFetchTool if web_fetch_config.provider == "deepseek" else WebFetchTool
+        tools.append(fetch_tool(fetch_provider, resolve_public_host))
     return tools

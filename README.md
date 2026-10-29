@@ -15,7 +15,7 @@ Codex の中核動作を理解しやすい Python コードとして表現する
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
 - ファイル読み取り、ファイル書き込み、シェル実行、パッチ適用ツール
-- Tavily / Firecrawl による Web 検索、Web ページ本文取得ツール
+- Tavily / treg（TinyFish direct）/ DeepSeek / Firecrawl による Web 検索、Web ページ本文取得ツール
 - JSONL によるセッションイベント保存
 
 ## 必要なもの
@@ -184,7 +184,7 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 
 `web_search` と `web_fetch` は独立した `provider` を選択します。
 主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
-`tavily` と `firecrawl` です。DeepSeek / treg / Exa は別Issueで追加するため、
+`tavily`、`treg`、`deepseek`、`firecrawl` です。Exa は別Issueで追加するため、
 現時点で指定すると設定エラーになります。
 
 ```toml
@@ -356,6 +356,89 @@ title が配列なら改行で連結します。選択した metadata は `firec
 [ADR 0025](docs/decisions/0025-firecrawl-cloud-v2-policy.md) を参照してください。
 本実装ではモック HTTP による契約テストを実施済みです。実装環境にキーがないため、
 認証疎通・実サイトの取得成功率・実消費 credit は未確認です。
+
+### DeepSeek Search / Fetch
+
+検索・本文取得にはそれぞれ独立して `provider = "deepseek"` を選べます。
+主モデルの設定を変える必要はなく、片方を Tavily のまま使うこともできます。
+`[tool]` で使う機能を有効にし、対応する Web 設定テーブルを次のように置き換えます。
+
+```toml
+[web_search]
+provider = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+max_results = 5
+timeout_seconds = 20
+[web_search.deepseek]
+need_content = false
+
+[web_fetch]
+provider = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_seconds = 20
+max_content_chars = 20000
+[web_fetch.deepseek]
+content_format = "markdown"
+```
+
+[DeepSeek Platform](https://platform.deepseek.com/) で API キーを作成し、必要な残高を用意したうえで、
+ローカルの環境変数 `DEEPSEEK_API_KEY` に設定してください。キーは設定ファイル・Issue・PR に記載しません。
+`api_key_env` は変更可能で、検索と取得に別のキーを指定できます。主モデルのキーは自動共用しません。
+無効な Web 機能のキーは要求しません。
+
+通信先は `POST https://api.deepseek.com/v1/tools/search` と
+`POST https://api.deepseek.com/v1/tools/fetch` です。専用 SDK・MCP・DeepSeek チャットモデルを経由せず、
+ホスト上の HTTP クライアントから直接接続します。`runtime.network` は Docker shell の設定なので、
+Web ツールの通信を止める場合は `[tool]` の該当機能を無効にしてください。
+
+- Search: `max_results` は 1〜50。query は空白のみ不可、Unicode 1〜128 文字で、
+  日本語・絵文字も文字数で検証します。`site:`、引用句、`lang:`、日付指定等の検索式はそのまま送ります。
+  切り詰め・分割はしません。`need_content` の省略時は `false` です。
+  snippet は短い `content` と `snippet`、生成要約は `summary`、ページ本文だけが `raw_content` になります。
+  本文未取得は null、検索 0 件は正常です。0〜3 の `rerank_score` は `metadata.deepseek` に保存し、
+  共通 `score` は null にします。Tavily の score や Jev の確率とは比較しません。
+  詳細: [Search schema](https://api-docs.deepseek.com/api/search/)。
+- Fetch: 公開 HTTP(S) URL のみ、host 必須、8192 文字以内、username/password 不可。
+  Markdown 専用で、`content_format = "text"` は設定エラーです。空 title は許容し、
+  空本文・不正本文・`max_content_chars` 超過はエラーにします。要求した URL を保持し、
+  redirect 後の URL は推測しません。取得先への認証・Cookie・任意ヘッダー転送機能はありません。
+  詳細: [Fetch schema](https://api-docs.deepseek.com/api/fetch/)。
+
+受信 JSON は 8 MiB までです。圧縮応答と API の redirect は拒否し、自動 retry・provider fallback は行いません。
+401 はキー、402 は残高の確認が必要です。403 は安全ポリシーによる拒否、Fetch の 404 は取得可能な本文なし、
+429 は rate limit として分類します。生エラー本文は履歴・主モデルへ渡しません。
+
+2026-10-29 確認の[公式ガイド](https://api-docs.deepseek.com/guides/search/)では、
+通常料金は Search / Fetch とも成功 1,000 リクエストあたり $0.75 です。
+空検索・失敗・timeout は課金対象外で、`count` は 1 リクエストの料金を増やしません。
+アカウント単位の上限は Search 100 QPS、Fetch 25 QPS で、Fetch には取得先ドメイン単位の上限もあります。
+複数キーの割当は合算されます。Claude Code / Codex 等のサーバー側ツールに対する期間限定条件を、
+この直接 REST 経路に適用しません。API は usage を返さないため、実課金の記録は生成しません。
+
+結果フィールドの意味は [ADR 0025](docs/decisions/0025-deepseek-search-result-semantics.md) に記録しています。
+
+認証疎通の状態: モック HTTP で検証済み。作業環境にキーが未設定のため、実アカウントによる
+Search / Fetch の返却内容・品質・速度は未確認です。
+
+### treg / TinyFish direct
+
+検索・取得をそれぞれ `provider = "treg"` に設定できます。Tavily との混在も可能です。
+**TinyFish 個別の provider キーは通常不要ですが、treg token は必要です。**
+`api_key_env = "TREG_TOKEN"` で環境変数を指定し、identity token の組織は
+`[web_search.treg]` / `[web_fetch.treg]` の `org` に明示します。per-org token では
+`org` を省略します。認証は `X-Treg-Token` で、CLI の設定ファイルを自動取得しません。
+
+初版は `tinyfish.web.search` / `tinyfish.web.fetch` の直接 endpoint に固定しています。
+有料 fallback があり得る `treg.web.search` / `treg.web.extract` の routed 経路は
+利用しません。2026-10-29 に公式 catalog の無料価格を確認し、呼び出し前にも毎回
+確認します。費用上限 header は 0 を指定し、報告課金の不一致はエラーにします。
+料金変更や BYOK の vendor 側請求まで含めた永続的な無料保証ではありません。
+未報告課金は `null` のまま保持します。
+
+検索件数はローカル上限で、自動ページング・本文取得はしません。取得は単一 URL の
+Markdown で、TTL（秒）と URL timeout（ミリ秒）を明示設定します。
+利用者の token による認証疎通は未確認です。設定例、送信先、価格確認の制約は
+[treg Web access ガイド](docs/treg-web-access.md) を参照してください。
 
 ## コンテキスト予算と自動コンパクション
 
@@ -556,8 +639,8 @@ uv run gear run --prompt-file task.txt --run-dir ../results/case-001
 | `apply_patch` | ワークスペース内に unified diff パッチを適用します。                      |
 | `glob`        | ワークスペース内のファイルとディレクトリを glob パターンで検索します。    |
 | `grep`        | ワークスペース内の UTF-8 テキストファイルを正規表現で検索します。         |
-| `web_search`  | 選択した Tavily / Firecrawl で Web 検索します。`web_search` で制御します。 |
-| `web_fetch`   | 選択した Tavily / Firecrawl で URL 本文を取得します。`web_fetch` で制御します。 |
+| `web_search`  | 選択した Tavily / treg / DeepSeek / Firecrawl で Web 検索します。`web_search` で制御します。 |
+| `web_fetch`   | 選択した Tavily / treg / DeepSeek / Firecrawl で URL 本文を取得します。`web_fetch` で制御します。 |
 
 ファイル操作とパッチ適用は、ワークスペース外のパスを明示的に拒否します。
 ファイル検索ツールも、ワークスペース外のパスを明示的に拒否します。
