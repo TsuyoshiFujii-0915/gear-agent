@@ -184,7 +184,7 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 
 `web_search` と `web_fetch` は独立した `provider` を選択します。
 主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
-`tavily` と `treg` です。DeepSeek / Exa / Firecrawl は別Issueで追加するため、
+`tavily`、`treg`、`deepseek` です。Exa / Firecrawl は別Issueで追加するため、
 現時点で指定すると設定エラーになります。
 
 ```toml
@@ -276,6 +276,69 @@ JSONL・Jev・要約・再開は既存のツール結果契約を利用します
 設計判断は [ADR 0023](docs/decisions/0023-select-web-providers-independently.md) と
 [ADR 0024](docs/decisions/0024-bound-web-provider-http-and-url-inputs.md) に記録しています。
 認証付きlive検証は、各プロバイダの実装Issueで別途実施します。
+
+### DeepSeek Search / Fetch
+
+検索・本文取得にはそれぞれ独立して `provider = "deepseek"` を選べます。
+主モデルの設定を変える必要はなく、片方を Tavily のまま使うこともできます。
+`[tool]` で使う機能を有効にし、対応する Web 設定テーブルを次のように置き換えます。
+
+```toml
+[web_search]
+provider = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+max_results = 5
+timeout_seconds = 20
+[web_search.deepseek]
+need_content = false
+
+[web_fetch]
+provider = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_seconds = 20
+max_content_chars = 20000
+[web_fetch.deepseek]
+content_format = "markdown"
+```
+
+[DeepSeek Platform](https://platform.deepseek.com/) で API キーを作成し、必要な残高を用意したうえで、
+ローカルの環境変数 `DEEPSEEK_API_KEY` に設定してください。キーは設定ファイル・Issue・PR に記載しません。
+`api_key_env` は変更可能で、検索と取得に別のキーを指定できます。主モデルのキーは自動共用しません。
+無効な Web 機能のキーは要求しません。
+
+通信先は `POST https://api.deepseek.com/v1/tools/search` と
+`POST https://api.deepseek.com/v1/tools/fetch` です。専用 SDK・MCP・DeepSeek チャットモデルを経由せず、
+ホスト上の HTTP クライアントから直接接続します。`runtime.network` は Docker shell の設定なので、
+Web ツールの通信を止める場合は `[tool]` の該当機能を無効にしてください。
+
+- Search: `max_results` は 1〜50。query は空白のみ不可、Unicode 1〜128 文字で、
+  日本語・絵文字も文字数で検証します。`site:`、引用句、`lang:`、日付指定等の検索式はそのまま送ります。
+  切り詰め・分割はしません。`need_content` の省略時は `false` です。
+  snippet は短い `content` と `snippet`、生成要約は `summary`、ページ本文だけが `raw_content` になります。
+  本文未取得は null、検索 0 件は正常です。0〜3 の `rerank_score` は `metadata.deepseek` に保存し、
+  共通 `score` は null にします。Tavily の score や Jev の確率とは比較しません。
+  詳細: [Search schema](https://api-docs.deepseek.com/api/search/)。
+- Fetch: 公開 HTTP(S) URL のみ、host 必須、8192 文字以内、username/password 不可。
+  Markdown 専用で、`content_format = "text"` は設定エラーです。空 title は許容し、
+  空本文・不正本文・`max_content_chars` 超過はエラーにします。要求した URL を保持し、
+  redirect 後の URL は推測しません。取得先への認証・Cookie・任意ヘッダー転送機能はありません。
+  詳細: [Fetch schema](https://api-docs.deepseek.com/api/fetch/)。
+
+受信 JSON は 8 MiB までです。圧縮応答と API の redirect は拒否し、自動 retry・provider fallback は行いません。
+401 はキー、402 は残高の確認が必要です。403 は安全ポリシーによる拒否、Fetch の 404 は取得可能な本文なし、
+429 は rate limit として分類します。生エラー本文は履歴・主モデルへ渡しません。
+
+2026-10-29 確認の[公式ガイド](https://api-docs.deepseek.com/guides/search/)では、
+通常料金は Search / Fetch とも成功 1,000 リクエストあたり $0.75 です。
+空検索・失敗・timeout は課金対象外で、`count` は 1 リクエストの料金を増やしません。
+アカウント単位の上限は Search 100 QPS、Fetch 25 QPS で、Fetch には取得先ドメイン単位の上限もあります。
+複数キーの割当は合算されます。Claude Code / Codex 等のサーバー側ツールに対する期間限定条件を、
+この直接 REST 経路に適用しません。API は usage を返さないため、実課金の記録は生成しません。
+
+結果フィールドの意味は [ADR 0025](docs/decisions/0025-deepseek-search-result-semantics.md) に記録しています。
+
+認証疎通の状態: モック HTTP で検証済み。作業環境にキーが未設定のため、実アカウントによる
+Search / Fetch の返却内容・品質・速度は未確認です。
 
 ### treg / TinyFish direct
 

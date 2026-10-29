@@ -136,6 +136,20 @@ class TavilyFetchOptions:
 
 
 @dataclass(frozen=True)
+class DeepSeekSearchOptions:
+    """Whether DeepSeek search should also retrieve page bodies."""
+
+    need_content: bool
+
+
+@dataclass(frozen=True)
+class DeepSeekFetchOptions:
+    """The explicitly supported DeepSeek extraction format."""
+
+    content_format: str
+
+
+@dataclass(frozen=True)
 class WebSearchConfig:
     """Independent search provider settings with an environment-resolved secret."""
 
@@ -143,7 +157,7 @@ class WebSearchConfig:
     max_results: int
     timeout_seconds: int
     provider: str
-    options: TavilySearchOptions | TregSearchOptions
+    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions
 
 
 @dataclass(frozen=True)
@@ -154,7 +168,7 @@ class WebFetchConfig:
     timeout_seconds: int
     max_content_chars: int
     provider: str
-    options: TavilyFetchOptions | TregFetchOptions
+    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions
 
 
 @dataclass(frozen=True)
@@ -587,9 +601,15 @@ def _web_provider_options(
 ) -> tuple[str, dict[str, object]]:
     # Absence explicitly selects Tavily for legacy configuration compatibility.
     provider = _required_string(table, "provider", name) if "provider" in table else "tavily"
+    if provider == "deepseek":
+        _reject_unknown_keys(table, name, common_keys | {"provider", "deepseek"})
+        options = _required_table(table, "deepseek") if "deepseek" in table else {}
+        keys = {"need_content"} if name == "web_search" else {"content_format"}
+        _reject_unknown_keys(options, f"{name}.deepseek", keys)
+        return provider, options
     if provider != "tavily":
         raise gear_error(
-            "config_value_invalid", f"Unsupported provider for {name}; expected tavily or treg.",
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg or deepseek.",
             "config", True, {"table": name, "key": "provider"},
         )
     _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
@@ -624,12 +644,20 @@ def _load_web_search_config(
         table, "web_search", {"api_key_env", "max_results", "timeout_seconds"},
         {"search_depth", "include_answer", "include_raw_content"},
     )
-    vendor = TavilySearchOptions(
-        search_depth=_required_web_search_depth(options),
-        include_answer=_required_bool(options, "include_answer", "web_search"),
-        include_raw_content=_required_bool(options, "include_raw_content", "web_search"),
-    )
-    max_results = _required_int_in_range(table, "max_results", "web_search", 1, 20)
+    vendor: TavilySearchOptions | DeepSeekSearchOptions
+    if provider == "deepseek":
+        # DeepSeek's initial policy deliberately leaves body retrieval to web_fetch.
+        need_content = (_required_bool(options, "need_content", "web_search.deepseek")
+                        if "need_content" in options else False)
+        vendor = DeepSeekSearchOptions(need_content)
+        max_results = _required_int_in_range(table, "max_results", "web_search", 1, 50)
+    else:
+        vendor = TavilySearchOptions(
+            search_depth=_required_web_search_depth(options),
+            include_answer=_required_bool(options, "include_answer", "web_search"),
+            include_raw_content=_required_bool(options, "include_raw_content", "web_search"),
+        )
+        max_results = _required_int_in_range(table, "max_results", "web_search", 1, 20)
     timeout = _required_positive_int(table, "timeout_seconds", "web_search")
     api_key_env = _required_string(table, "api_key_env", "web_search")
     return WebSearchConfig(
@@ -663,13 +691,24 @@ def _load_web_fetch_config(
         table, "web_fetch", {"api_key_env", "timeout_seconds", "max_content_chars"},
         {"extract_depth", "content_format", "include_images", "include_favicon"},
     )
-    vendor = TavilyFetchOptions(
-        extract_depth=_required_web_fetch_depth(options),
-        content_format=_required_web_fetch_content_format(options),
-        include_images=_required_bool(options, "include_images", "web_fetch"),
-        include_favicon=_required_bool(options, "include_favicon", "web_fetch"),
-    )
-    timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 1, 60)
+    vendor: TavilyFetchOptions | DeepSeekFetchOptions
+    if provider == "deepseek":
+        # Markdown is the only format provided by DeepSeek's standalone Fetch API.
+        content_format = (_required_string(options, "content_format", "web_fetch.deepseek")
+                          if "content_format" in options else "markdown")
+        if content_format != "markdown":
+            raise gear_error("config_value_invalid", "DeepSeek fetch supports only markdown.",
+                             "config", True, {"table": "web_fetch.deepseek", "key": "content_format"})
+        vendor = DeepSeekFetchOptions(content_format)
+        timeout = _required_positive_int(table, "timeout_seconds", "web_fetch")
+    else:
+        vendor = TavilyFetchOptions(
+            extract_depth=_required_web_fetch_depth(options),
+            content_format=_required_web_fetch_content_format(options),
+            include_images=_required_bool(options, "include_images", "web_fetch"),
+            include_favicon=_required_bool(options, "include_favicon", "web_fetch"),
+        )
+        timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 1, 60)
     limit = _required_positive_int(table, "max_content_chars", "web_fetch")
     api_key_env = _required_string(table, "api_key_env", "web_fetch")
     return WebFetchConfig(
