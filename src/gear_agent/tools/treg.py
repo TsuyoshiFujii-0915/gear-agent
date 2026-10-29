@@ -47,7 +47,7 @@ class TregSearchProvider:
             if position is not None and (type(position) is not int or position < 1):
                 raise _invalid(f"{location}.position must be a positive integer when reported.", "web_search")
             normalized.append({
-                "title": _string(item, "title", location, "web_search"),
+                "title": _nullable_string(item, "title", location, "web_search"),
                 "url": _string(item, "url", location, "web_search"),
                 "content": _string(item, "snippet", location, "web_search"),
                 "score": None,
@@ -100,9 +100,9 @@ class TregFetchProvider:
         if content_format != "markdown":
             raise _invalid("Fetch response.results[0].format must be markdown.", "web_fetch")
         return self._http.redact({
-            "url": url, "title": _nullable_string(item, "title", "web_fetch"), "content": content,
+            "url": url, "title": _nullable_string(item, "title", "results[0]", "web_fetch"), "content": content,
             "provider_metadata": metadata | {
-                "final_url": _nullable_string(item, "final_url", "web_fetch"),
+                "final_url": _nullable_string(item, "final_url", "results[0]", "web_fetch"),
                 "format": content_format, "ttl_seconds": self._config.ttl_seconds,
                 "per_url_timeout_ms": self._config.per_url_timeout_ms,
             },
@@ -140,6 +140,12 @@ class _TregHTTP:
             response = client.send(request, stream=True)
             try:
                 if response.status_code != 200:
+                    if path.startswith("/call/"):
+                        try:
+                            self._metadata(response.headers, path.removeprefix("/call/"))
+                        except GearError as error:
+                            raise gear_error(error.error_type, error.message, error.origin, error.recoverable,
+                                             error.details | {"status": response.status_code}) from None
                     raise gear_error("treg_http_status_error", f"Treg {path} returned HTTP {response.status_code}.",
                                      self._origin, True, {"status": response.status_code, "endpoint": path})
                 encoding = response.headers.get("Content-Encoding")
@@ -164,8 +170,8 @@ class _TregHTTP:
         except httpx.HTTPError:
             raise _error("treg_http_request_failed", f"Treg {path} HTTP request failed.", self._origin) from None
         try:
-            parsed = json.loads(data)
-        except (ValueError, UnicodeError):
+            parsed = json.loads(data.decode("utf-8"), parse_constant=_reject_json_constant)
+        except (ValueError, RecursionError):
             raise _error("treg_json_parse_failed", f"Treg {path} returned invalid JSON.", self._origin) from None
         if not isinstance(parsed, dict):
             raise _invalid(f"Treg {path} response must be an object.", self._origin)
@@ -183,6 +189,8 @@ class _TregHTTP:
             raise _error("treg_price_unverified", "Treg catalog no longer confirms a free USD price; call refused.", self._origin)
         if any(entry.get(key) is not None for key in ("overflow_via", "overflow_price_usd", "routed_children")):
             raise _error("treg_route_mismatch", "Treg catalog advertises routing or overflow; call refused.", self._origin)
+        if entry.get("async") not in (None, False):
+            raise _error("treg_catalog_mismatch", "Treg catalog advertises asynchronous execution; call refused.", self._origin)
 
     def _metadata(self, headers: httpx.Headers, endpoint: str) -> dict[str, Any]:
         charged: int | None = None
@@ -260,10 +268,10 @@ def _string(item: dict[str, Any], key: str, location: str, origin: str) -> str:
     return value
 
 
-def _nullable_string(item: dict[str, Any], key: str, origin: str) -> str | None:
+def _nullable_string(item: dict[str, Any], key: str, location: str, origin: str) -> str | None:
     value = item.get(key)
     if value is not None and not isinstance(value, str):
-        raise _invalid(f"TinyFish results[0].{key} must be a string when reported.", origin)
+        raise _invalid(f"TinyFish {location}.{key} must be a string when reported.", origin)
     return value
 
 
@@ -273,3 +281,7 @@ def _invalid(message: str, origin: str) -> GearError:
 
 def _error(category: str, message: str, origin: str) -> GearError:
     return gear_error(category, message, origin, True, {"provider": "treg"})
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError("Nonfinite JSON constants are not supported.")
