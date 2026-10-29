@@ -4,6 +4,22 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class TregSearchOptions:
+    """Treg-specific search options; None selects no organization header."""
+
+    org: str | None
+
+
+@dataclass(frozen=True)
+class TregFetchOptions:
+    """Treg fetch options with explicit cache and upstream timeout units."""
+
+    org: str | None
+    ttl_seconds: int
+    per_url_timeout_ms: int
+
+
+@dataclass(frozen=True)
 class TregSearchConfig:
     """Direct TinyFish search settings.
 
