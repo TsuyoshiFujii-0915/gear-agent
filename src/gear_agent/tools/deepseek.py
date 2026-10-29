@@ -61,6 +61,15 @@ class DeepSeekTransport:
                     encoding = response.headers.get("content-encoding")
                     if encoding is not None and encoding.lower() != "identity":
                         raise _invalid_response(origin, "Unexpected response content encoding.")
+                    length = response.headers.get("content-length")
+                    if length is not None:
+                        if not length.isascii() or not length.isdecimal():
+                            raise _invalid_response(origin, "DeepSeek returned invalid Content-Length.")
+                        if len(length) > 20 or int(length) > self._max_response_bytes:
+                            raise gear_error(
+                                "deepseek_response_too_large", "DeepSeek response exceeds byte limit.",
+                                origin, True, {"max_response_bytes": self._max_response_bytes},
+                            )
                     for chunk in response.iter_bytes(chunk_size=1024):
                         if len(body) + len(chunk) > self._max_response_bytes:
                             raise gear_error(
@@ -78,7 +87,7 @@ class DeepSeekTransport:
                              origin, True, {}) from None
         try:
             parsed = json.loads(body.decode("utf-8"), parse_constant=_reject_constant)
-        except (ValueError, UnicodeError):
+        except (ValueError, RecursionError):
             raise _invalid_response(origin, "DeepSeek returned invalid UTF-8 JSON.") from None
         if not isinstance(parsed, dict):
             raise _invalid_response(origin, "DeepSeek response must be an object.")
