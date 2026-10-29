@@ -136,6 +136,24 @@ class TavilyFetchOptions:
 
 
 @dataclass(frozen=True)
+class FirecrawlSearchOptions:
+    """Whether Search descriptions contain query highlights instead of snippets."""
+
+    highlights: bool
+
+
+@dataclass(frozen=True)
+class FirecrawlFetchOptions:
+    """Explicit Cloud v2 Scrape policy; durations are in milliseconds."""
+
+    only_main_content: bool
+    max_age_ms: int
+    wait_for_ms: int
+    proxy: str
+    store_in_cache: bool
+
+
+@dataclass(frozen=True)
 class DeepSeekSearchOptions:
     """Whether DeepSeek search should also retrieve page bodies."""
 
@@ -157,7 +175,7 @@ class WebSearchConfig:
     max_results: int
     timeout_seconds: int
     provider: str
-    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions
+    options: TavilySearchOptions | DeepSeekSearchOptions | TregSearchOptions | FirecrawlSearchOptions
 
 
 @dataclass(frozen=True)
@@ -168,7 +186,7 @@ class WebFetchConfig:
     timeout_seconds: int
     max_content_chars: int
     provider: str
-    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions
+    options: TavilyFetchOptions | DeepSeekFetchOptions | TregFetchOptions | FirecrawlFetchOptions
 
 
 @dataclass(frozen=True)
@@ -609,7 +627,7 @@ def _web_provider_options(
         return provider, options
     if provider != "tavily":
         raise gear_error(
-            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg or deepseek.",
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily, treg, deepseek or firecrawl.",
             "config", True, {"table": name, "key": "provider"},
         )
     _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
@@ -633,6 +651,8 @@ def _load_web_search_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
+    if table.get("provider") == "firecrawl":
+        return _load_firecrawl_search_config(table, environment)
     if table.get("provider") == "treg":
         options = _treg_options(table, "web_search", {"max_results"}, {"org"})
         treg_options = TregSearchOptions(_treg_org(options, "web_search.treg"))
@@ -674,6 +694,8 @@ def _load_web_fetch_config(
     if not enabled:
         return None
     table = _required_table(raw_data, "web_fetch")
+    if table.get("provider") == "firecrawl":
+        return _load_firecrawl_fetch_config(table, environment)
     if table.get("provider") == "treg":
         options = _treg_options(table, "web_fetch", {"max_content_chars"},
                                 {"org", "ttl_seconds", "per_url_timeout_ms"})
@@ -715,6 +737,93 @@ def _load_web_fetch_config(
         api_key=_required_secret(api_key_env, environment, "web_fetch.api_key_env"),
         timeout_seconds=timeout, max_content_chars=limit, provider=provider, options=vendor,
     )
+
+
+def _firecrawl_options(
+    table: dict[str, object], name: str, common_keys: set[str], defaults: dict[str, object],
+) -> dict[str, object]:
+    """Validates nested vendor settings and applies the documented request policy.
+
+    Args:
+        table: Enabled web tool configuration.
+        name: Tool table name for diagnostics.
+        common_keys: Shared fields accepted by this tool.
+        defaults: Explicit Firecrawl policy for omitted vendor options.
+
+    Returns:
+        Complete vendor settings; unknown and flat vendor fields are rejected.
+    """
+    _reject_unknown_keys(table, name, common_keys | {"provider", "firecrawl"})
+    if "firecrawl" not in table:
+        return dict(defaults)
+    options = _required_table(table, "firecrawl")
+    _reject_unknown_keys(options, f"{name}.firecrawl", set(defaults))
+    return {**defaults, **options}
+
+
+def _load_firecrawl_search_config(
+    table: dict[str, object], environment: Mapping[str, str],
+) -> WebSearchConfig:
+    options = _firecrawl_options(
+        table, "web_search", {"api_key_env", "max_results", "timeout_seconds"},
+        {"highlights": False},
+    )
+    vendor = FirecrawlSearchOptions(
+        highlights=_required_bool(options, "highlights", "web_search.firecrawl"),
+    )
+    limit = _required_int_in_range(table, "max_results", "web_search", 1, 100)
+    timeout = _required_int_in_range(table, "timeout_seconds", "web_search", 2, 301)
+    key_env = _required_string(table, "api_key_env", "web_search")
+    return WebSearchConfig(
+        api_key=_required_secret(key_env, environment, "web_search.api_key_env"),
+        max_results=limit, timeout_seconds=timeout, provider="firecrawl", options=vendor,
+    )
+
+
+def _load_firecrawl_fetch_config(
+    table: dict[str, object], environment: Mapping[str, str],
+) -> WebFetchConfig:
+    options = _firecrawl_options(
+        table, "web_fetch", {"api_key_env", "timeout_seconds", "max_content_chars"},
+        {"only_main_content": True, "max_age_ms": 172800000, "wait_for_ms": 0,
+         "proxy": "basic", "store_in_cache": False},
+    )
+    origin = "web_fetch.firecrawl"
+    timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 2, 301)
+    age = _required_nonnegative_int(options, "max_age_ms", origin)
+    wait = _required_nonnegative_int(options, "wait_for_ms", origin)
+    if wait > 60000 or wait >= (timeout - 1) * 1000:
+        raise gear_error(
+            "config_value_invalid", "web_fetch.firecrawl.wait_for_ms must be at most 60000 and less than the API timeout.",
+            "config", True, {"table": origin, "key": "wait_for_ms"},
+        )
+    proxy = _required_string(options, "proxy", origin)
+    if proxy not in {"basic", "enhanced", "auto"}:
+        raise gear_error(
+            "config_value_invalid", "web_fetch.firecrawl.proxy must be basic, enhanced or auto.",
+            "config", True, {"table": origin, "key": "proxy"},
+        )
+    vendor = FirecrawlFetchOptions(
+        only_main_content=_required_bool(options, "only_main_content", origin),
+        max_age_ms=age, wait_for_ms=wait, proxy=proxy,
+        store_in_cache=_required_bool(options, "store_in_cache", origin),
+    )
+    limit = _required_positive_int(table, "max_content_chars", "web_fetch")
+    key_env = _required_string(table, "api_key_env", "web_fetch")
+    return WebFetchConfig(
+        api_key=_required_secret(key_env, environment, "web_fetch.api_key_env"),
+        timeout_seconds=timeout, max_content_chars=limit, provider="firecrawl", options=vendor,
+    )
+
+
+def _required_nonnegative_int(data: dict[str, object], key: str, origin: str) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise gear_error(
+            "config_value_invalid", f"Missing or invalid nonnegative integer: {origin}.{key}",
+            "config", True, {"table": origin, "key": key},
+        )
+    return value
 
 
 def _treg_options(table: dict[str, object], name: str, limits: set[str],
