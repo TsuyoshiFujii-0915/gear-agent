@@ -182,7 +182,10 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 `[tool]` はモデルへ公開するツールを明示的に制御します。すべてのキーは必須の真偽値です。
 未定義のキー、欠けているキー、真偽値以外の値は設定エラーとして起動時に失敗します。
 
-Tavily Search を使う `web_search` を有効にする例です。
+`web_search` と `web_fetch` は独立した `provider` を選択します。
+主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
+`tavily` と `exa` です。DeepSeek / treg / Firecrawl は別Issueで追加するため、
+現時点で指定すると設定エラーになります。
 
 ```toml
 [tool]
@@ -196,35 +199,85 @@ web_search = true
 web_fetch = true
 
 [web_search]
-api_key_env = "TAVILY_API_KEY"
-search_depth = "basic"
+provider = "tavily"
+api_key_env = "TAVILY_SEARCH_KEY"
 max_results = 5
 timeout_seconds = 20
+
+[web_search.tavily]
+search_depth = "basic"
 include_answer = true
 include_raw_content = false
 
 [web_fetch]
-api_key_env = "TAVILY_API_KEY"
+provider = "tavily"
+api_key_env = "TAVILY_FETCH_KEY"
+timeout_seconds = 20
+max_content_chars = 20000
+
+[web_fetch.tavily]
 extract_depth = "basic"
 content_format = "markdown"
-timeout_seconds = 20
 include_images = false
 include_favicon = true
-max_content_chars = 20000
 ```
 
-`web_search = true` の場合、`[web_search]` は必須です。`web_fetch = true` の場合、
-`[web_fetch]` は必須です。`api_key_env` が指す環境変数に Tavily API キーが存在しない場合は、
-設定エラーとして起動時に失敗します。
+`api_key_env` は環境変数名です。上の例では `TAVILY_SEARCH_KEY` と
+`TAVILY_FETCH_KEY` にキーを設定します。同じ `TAVILY_API_KEY` を両方で指定しても
+構いません。APIキーの設定ファイルへの直書きはサポートしません。
+有効な機能の設定とキーだけを要求し、無効な機能は通信しません。
+`gear init` が生成する設定では、従来どおり両機能とも無効です。
 
-`[web_search]` の `search_depth` は `basic`、`advanced`、`fast`、`ultra-fast` のいずれかです。
-`max_results` は 1 以上 20 以下の整数です。
-`timeout_seconds` は 1 以上の整数です。
+既存のフラットな `[web_search]` / `[web_fetch]` 設定は変更せずに利用できます。
+`provider` の省略は互換規則として `tavily` を意味します。新形式へ移行する場合は、
+Tavily 固有項目をすべて各 `.tavily` テーブルへ移してください。
+旧形式の固有項目と新テーブルの混在は、値が同じでも設定エラーです。
+未知のprovider・キー、欠落した必須項目、不正な型・値域を明示的に拒否します。
+暗黙のプロバイダ切替・再試行・fallbackはありません。
 
-`[web_fetch]` の `extract_depth` は `basic` または `advanced` です。
-`content_format` は `markdown` または `text` です。
-`timeout_seconds` と `max_content_chars` は 1 以上の整数です。
-各 Web 設定テーブルで未定義のキー、欠けているキー、型が合わない値は設定エラーとして起動時に失敗します。
+検索の `max_results` は従来どおり 1〜20、`timeout_seconds` は1以上の整数です。
+`search_depth` は `basic` / `advanced` / `fast` / `ultra-fast` を指定します。
+取得の `timeout_seconds` は Tavily Extract の上限に合わせて 1〜60、
+`max_content_chars` は1以上の整数です。`extract_depth` は `basic` / `advanced`、
+`content_format` は `markdown` / `text` を指定します。上限を超えた設定を丸めません。
+API仕様は [Tavily Search](https://docs.tavily.com/documentation/api-reference/endpoint/search) と
+[Tavily Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract) を参照してください。
+
+モデルに公開する引数は `web_search(query)` / `web_fetch(url)` のままです。
+検索の `content` はスニペット、`answer` は生成された回答、`raw_content` は抽出本文です。
+取得の `content` はページ本文であり、生成された要約を本文として扱いません。
+本文は外部データとしてツール結果に保存され、system/developer指示へ昇格しません。
+取得結果の `requested_url` は元の入力、`url` はプロバイダが報告したURLです。
+Tavily / Exa の応答から最終リダイレクト先を確定できないため、`final_url` は `null` です。
+未報告の title / score / usage は `null` または欠落で表し、検索0件は正常な空配列です。
+空本文・部分失敗・HTTP 200内のerror・不正JSON・本文上限超過はエラーになります。
+無断の要約・切り詰めは行いません。
+
+Tavily の Web 通信はホストから `https://api.tavily.com/search` または `/extract` へ送信します。
+Exa の送信先は下記の設定説明に記載しています。
+検索語・取得URLを選択プロバイダへ渡すため、サービス側の料金が発生し得ます。
+`runtime.network` はDocker shellのネットワーク制御であり、Webツール通信とは別です。
+取得先は公開HTTP/HTTPS URLに限定し、userinfo・ローカルホスト・非公開IP・
+非公開IPへ解決されるホストを送信前に拒否します。Gearから取得対象サイトへ任意の
+ヘッダーやCookieを送る機能はありません。上流APIへの認証付きリクエストはredirectを
+追跡しません。実際の取得はプロバイダが行うため、上流側のDNS再解決・redirect先の
+アクセス制御はプロバイダにも依存します。
+
+応答は最大8 MiBまで受信します。identity encodingを要求し、圧縮応答は明示的に拒否して
+展開によるメモリ増加を防ぎます。エラーには生の上流本文や認証ヘッダーを含めません。
+既存フィールドに加えて `provider` と `provider_metadata.<provider>.usage` を保存します。
+usageは `{"unit": "credits", "value": 1}` のような配列で、未報告時は空配列です。
+Tavily の `credits` は従来のフィールドにも残します。scoreはprovider固有の値であり、
+共通確率として比較しません。credits / USD / tokensを合算・推定しません。
+Exa の報告された USD 推定費用には `kind = "estimate"` を付け、実請求の usage と区別します。
+headlessのrun metadataには有効providerを、trace/metricsには呼出しごとのprovider・
+報告usageの単位・処理時間・成否を記録します。観測メトリクスにはqueryやページ本文を
+コピーしません。APIキーはrepr・診断・run metadata・成果物から除外／秘匿します。
+JSONL・Jev・要約・再開は既存のツール結果契約を利用します。
+
+設計判断は [ADR 0023](docs/decisions/0023-select-web-providers-independently.md) と
+[ADR 0024](docs/decisions/0024-bound-web-provider-http-and-url-inputs.md) に記録しています。
+認証付きlive検証は、各プロバイダの実装Issueで別途実施します。
 
 ### Exa Search / Contents
 
@@ -305,17 +358,24 @@ provider の `id` を区別し、URL 単位の失敗、対応不明、本文欠�
 Dashboard の残高を利用時点で確認してください。応答の `costDollars` は
 `provider_metadata.exa.estimated_cost_dollars` に provider 報告の **USD 推定値** として保存します。
 実請求、credits、主モデルの tokens とは合算せず、未報告は `null` です。
+報告された total がある場合は、共通の `usage` に
+`{"unit": "USD", "value": 0.001, "kind": "estimate"}` のような形で記録し、trace/metrics にも渡します。
+total が未報告なら空配列とし、内訳の合算や 0 での補完はしません。
 
 通信先は `https://api.exa.ai/search` / `contents` です。ホスト側の通信であり、Docker shell の
 `runtime.network` とは独立しています。取得 URL は http/https に限定し、userinfo、localhost、
-非公開 IP リテラル等を拒否します。Gear は取得対象へ直接アクセスせず、DNS 解決とページ取得は
-Exa が行います。API 認証リクエストの redirect、自動 retry、別 provider への fallback は行いません。
+非公開 IP リテラル等を拒否します。共通の URL 検証で DNS 解決も行い、非公開 IP へ解決される
+ホストや解決失敗を送信前に拒否します。実際のページ取得は Exa が行うため、provider 側の
+DNS 再解決・redirect 先の検証は Exa にも依存します。
+API 認証リクエストの redirect、自動 retry、別 provider への fallback は行いません。
 HTTP 応答は `max_response_bytes` 以下に制限し、圧縮応答を拒否して展開時の過大な受信も防ぎます。
-本文上限と受信上限はそれぞれ正の整数が必須です。上流の生エラー本文は履歴や主モデルへ渡しません。
+本文上限は正の整数、受信上限は 1〜8388608 バイト（共通の 8 MiB 上限以下）が必須です。
+重複 JSON キーは曖昧な応答として拒否します。上流の生エラー本文は履歴や主モデルへ渡しません。
 
 実装検証はモック HTTP で実施しました。`EXA_API_KEY` 未設定のため、認証付きの実 API 疎通、
-検索品質、実費用は未確認です。#31 の共通基盤がない checkout 向けに必要な選択境界を追加しており、
-既存 Tavily transport の共通化・安全性改修は #31 の範囲として残しています。
+検索品質、実費用は未確認です。Exa は #31 の共通ツール・provider factory・HTTP・URL 検証・観測基盤を利用します。
+統合方針は [ADR 0027](docs/decisions/0027-integrate-exa-with-web-provider-foundation.md)、
+推定費用の扱いは [ADR 0028](docs/decisions/0028-distinguish-web-cost-estimates-from-usage.md) に記載しています。
 
 ## コンテキスト予算と自動コンパクション
 

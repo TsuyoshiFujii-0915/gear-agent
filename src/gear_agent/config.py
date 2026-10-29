@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
@@ -10,10 +10,13 @@ import tomllib
 from gear_agent.errors import GearError, gear_error
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
 from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
-from gear_agent.exa_config import ExaFetchConfig, ExaSearchConfig, load_exa_fetch, load_exa_search
+from gear_agent.exa_config import (
+    ExaFetchOptions, ExaSearchOptions, load_exa_fetch_options, load_exa_search_options,
+)
 
 
 DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
+MAX_WEB_RESPONSE_BYTES = 8 * 1024 * 1024
 
 DEFAULT_CONFIG_TEXT = """[model]
 url = "http://localhost:1234/v1/responses"
@@ -102,8 +105,8 @@ class ToolConfig:
         apply_patch: Whether to expose the patch application tool.
         glob: Whether to expose the filesystem glob tool.
         grep: Whether to expose the filesystem grep tool.
-        web_search: Whether to expose the Tavily web search tool.
-        web_fetch: Whether to expose the Tavily web fetch tool.
+        web_search: Whether to expose the web search tool.
+        web_fetch: Whether to expose the web fetch tool.
     """
 
     shell_tool: bool
@@ -117,47 +120,61 @@ class ToolConfig:
 
 
 @dataclass(frozen=True)
-class WebSearchConfig:
-    """Tavily web search configuration.
+class TavilySearchOptions:
+    """Tavily-only search options, separate from common provider settings."""
 
-    Attributes:
-        api_key: Tavily API key resolved from the configured environment variable.
-        search_depth: Tavily search depth.
-        max_results: Maximum Tavily search results to return.
-        timeout_seconds: Tavily request timeout in seconds.
-        include_answer: Whether Tavily should include a generated answer.
-        include_raw_content: Whether Tavily should include raw result content.
-    """
-
-    api_key: str
     search_depth: str
-    max_results: int
-    timeout_seconds: int
     include_answer: bool
     include_raw_content: bool
 
 
 @dataclass(frozen=True)
-class WebFetchConfig:
-    """Tavily web fetch configuration.
+class TavilyFetchOptions:
+    """Tavily-only extraction options."""
 
-    Attributes:
-        api_key: Tavily API key resolved from the configured environment variable.
-        extract_depth: Tavily extraction depth.
-        content_format: Extracted content format.
-        timeout_seconds: Tavily request timeout in seconds.
-        include_images: Whether Tavily should include page image URLs.
-        include_favicon: Whether Tavily should include the page favicon URL.
-        max_content_chars: Maximum content length accepted from Tavily.
-    """
-
-    api_key: str
     extract_depth: str
     content_format: str
-    timeout_seconds: int
     include_images: bool
     include_favicon: bool
+
+
+@dataclass(frozen=True)
+class WebSearchConfig:
+    """Independent search provider settings with an environment-resolved secret."""
+
+    api_key: str = field(repr=False)
+    max_results: int
+    timeout_seconds: int
+    provider: str
+    options: TavilySearchOptions | ExaSearchOptions
+
+
+@dataclass(frozen=True)
+class WebFetchConfig:
+    """Independent fetch provider settings with an environment-resolved secret."""
+
+    api_key: str = field(repr=False)
+    timeout_seconds: int
     max_content_chars: int
+    provider: str
+    options: TavilyFetchOptions | ExaFetchOptions
+
+
+@dataclass(frozen=True)
+class ExaSearchConfig(WebSearchConfig):
+    """Common search settings with Exa's explicitly required content limits."""
+
+    options: ExaSearchOptions
+    max_content_chars: int
+    max_response_bytes: int
+
+
+@dataclass(frozen=True)
+class ExaFetchConfig(WebFetchConfig):
+    """Common fetch settings with Exa's explicitly required response limit."""
+
+    options: ExaFetchOptions
+    max_response_bytes: int
 
 
 @dataclass(frozen=True)
@@ -190,8 +207,8 @@ class AppConfig:
         model: Model endpoint configuration.
         runtime: Runtime configuration.
         tool: Model-callable tool configuration.
-        web_search: Tavily web search configuration when enabled.
-        web_fetch: Tavily web fetch configuration when enabled.
+        web_search: Independent web search configuration when enabled.
+        web_fetch: Independent web fetch configuration when enabled.
         context_budget: Explicit context policy; absent legacy configuration disables it.
         compaction: Strategy policy; absent legacy configuration retains summary.
     """
@@ -199,8 +216,8 @@ class AppConfig:
     model: ModelConfig
     runtime: RuntimeConfig
     tool: ToolConfig
-    web_search: WebSearchConfig | ExaSearchConfig | None
-    web_fetch: WebFetchConfig | ExaFetchConfig | None
+    web_search: WebSearchConfig | None
+    web_fetch: WebFetchConfig | None
     context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET
     compaction: CompactionConfig = SUMMARY_COMPACTION
 
@@ -585,39 +602,54 @@ def _validate_reasoning_replay_url(
     )
 
 
+def _web_provider_options(
+    table: dict[str, object], name: str, common_keys: set[str], vendor_keys: set[str],
+) -> tuple[str, dict[str, object]]:
+    # Absence explicitly selects Tavily for legacy configuration compatibility.
+    provider = _required_string(table, "provider", name) if "provider" in table else "tavily"
+    if provider != "tavily":
+        raise gear_error(
+            "config_value_invalid", f"Unsupported provider for {name}; expected tavily or exa.",
+            "config", True, {"table": name, "key": "provider"},
+        )
+    _reject_unknown_keys(table, name, common_keys | vendor_keys | {"provider", "tavily"})
+    if "tavily" in table:
+        if vendor_keys.intersection(table):
+            raise gear_error(
+                "config_value_invalid", f"Cannot mix flat and nested Tavily options in {name}.",
+                "config", True, {"table": name},
+            )
+        options = _required_table(table, "tavily")
+        _reject_unknown_keys(options, f"{name}.tavily", vendor_keys)
+        return provider, options
+    return provider, {key: table[key] for key in vendor_keys if key in table}
+
+
 def _load_web_search_config(
     raw_data: dict[str, object],
     enabled: bool,
     environment: Mapping[str, str],
-) -> WebSearchConfig | ExaSearchConfig | None:
+) -> WebSearchConfig | None:
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
-    if _web_provider(table, "web_search") == "exa":
-        api_key_env = _required_string(table, "api_key_env", "web_search")
-        return load_exa_search(table, _required_secret(api_key_env, environment, "web_search.api_key_env"))
-    _reject_unknown_keys(
-        table,
-        "web_search",
-        {
-            "provider",
-            "api_key_env",
-            "search_depth",
-            "max_results",
-            "timeout_seconds",
-            "include_answer",
-            "include_raw_content",
-        },
+    if table.get("provider") == "exa":
+        return _load_exa_search_config(table, environment)
+    provider, options = _web_provider_options(
+        table, "web_search", {"api_key_env", "max_results", "timeout_seconds"},
+        {"search_depth", "include_answer", "include_raw_content"},
     )
+    vendor = TavilySearchOptions(
+        search_depth=_required_web_search_depth(options),
+        include_answer=_required_bool(options, "include_answer", "web_search"),
+        include_raw_content=_required_bool(options, "include_raw_content", "web_search"),
+    )
+    max_results = _required_int_in_range(table, "max_results", "web_search", 1, 20)
+    timeout = _required_positive_int(table, "timeout_seconds", "web_search")
     api_key_env = _required_string(table, "api_key_env", "web_search")
-    api_key = _required_secret(api_key_env, environment, "web_search.api_key_env")
     return WebSearchConfig(
-        api_key=api_key,
-        search_depth=_required_web_search_depth(table),
-        max_results=_required_int_in_range(table, "max_results", "web_search", 1, 20),
-        timeout_seconds=_required_positive_int(table, "timeout_seconds", "web_search"),
-        include_answer=_required_bool(table, "include_answer", "web_search"),
-        include_raw_content=_required_bool(table, "include_raw_content", "web_search"),
+        api_key=_required_secret(api_key_env, environment, "web_search.api_key_env"),
+        max_results=max_results, timeout_seconds=timeout, provider=provider, options=vendor,
     )
 
 
@@ -625,47 +657,62 @@ def _load_web_fetch_config(
     raw_data: dict[str, object],
     enabled: bool,
     environment: Mapping[str, str],
-) -> WebFetchConfig | ExaFetchConfig | None:
+) -> WebFetchConfig | None:
     if not enabled:
         return None
     table = _required_table(raw_data, "web_fetch")
-    if _web_provider(table, "web_fetch") == "exa":
-        api_key_env = _required_string(table, "api_key_env", "web_fetch")
-        return load_exa_fetch(table, _required_secret(api_key_env, environment, "web_fetch.api_key_env"))
-    _reject_unknown_keys(
-        table,
-        "web_fetch",
-        {
-            "provider",
-            "api_key_env",
-            "extract_depth",
-            "content_format",
-            "timeout_seconds",
-            "include_images",
-            "include_favicon",
-            "max_content_chars",
-        },
+    if table.get("provider") == "exa":
+        return _load_exa_fetch_config(table, environment)
+    provider, options = _web_provider_options(
+        table, "web_fetch", {"api_key_env", "timeout_seconds", "max_content_chars"},
+        {"extract_depth", "content_format", "include_images", "include_favicon"},
     )
+    vendor = TavilyFetchOptions(
+        extract_depth=_required_web_fetch_depth(options),
+        content_format=_required_web_fetch_content_format(options),
+        include_images=_required_bool(options, "include_images", "web_fetch"),
+        include_favicon=_required_bool(options, "include_favicon", "web_fetch"),
+    )
+    timeout = _required_int_in_range(table, "timeout_seconds", "web_fetch", 1, 60)
+    limit = _required_positive_int(table, "max_content_chars", "web_fetch")
     api_key_env = _required_string(table, "api_key_env", "web_fetch")
-    api_key = _required_secret(api_key_env, environment, "web_fetch.api_key_env")
     return WebFetchConfig(
-        api_key=api_key,
-        extract_depth=_required_web_fetch_depth(table),
-        content_format=_required_web_fetch_content_format(table),
-        timeout_seconds=_required_positive_int(table, "timeout_seconds", "web_fetch"),
-        include_images=_required_bool(table, "include_images", "web_fetch"),
-        include_favicon=_required_bool(table, "include_favicon", "web_fetch"),
-        max_content_chars=_required_positive_int(table, "max_content_chars", "web_fetch"),
+        api_key=_required_secret(api_key_env, environment, "web_fetch.api_key_env"),
+        timeout_seconds=timeout, max_content_chars=limit, provider=provider, options=vendor,
     )
 
 
-def _web_provider(table: dict[str, object], origin: str) -> str:
-    # Provider omission is the documented compatibility rule for legacy Tavily TOML.
-    provider = table.get("provider", "tavily")
-    if provider not in ("tavily", "exa"):
-        raise gear_error("config_value_invalid", f"Unsupported provider in {origin}.",
-                         "config", True, {"table": origin, "key": "provider"})
-    return provider
+def _load_exa_search_config(table: dict[str, object], environment: Mapping[str, str]) -> ExaSearchConfig:
+    origin = "web_search"
+    _reject_unknown_keys(table, origin, {"provider", "api_key_env", "timeout_seconds", "max_results",
+                                         "max_content_chars", "max_response_bytes", "exa"})
+    options = load_exa_search_options(_required_table(table, "exa"))
+    timeout = _required_positive_int(table, "timeout_seconds", origin)
+    count = _required_int_in_range(table, "max_results", origin, 1, 100)
+    content_limit = _required_positive_int(table, "max_content_chars", origin)
+    response_limit = _required_int_in_range(table, "max_response_bytes", origin, 1, MAX_WEB_RESPONSE_BYTES)
+    api_key_env = _required_string(table, "api_key_env", origin)
+    return ExaSearchConfig(
+        api_key=_required_secret(api_key_env, environment, f"{origin}.api_key_env"),
+        max_results=count, timeout_seconds=timeout, provider="exa", options=options,
+        max_content_chars=content_limit, max_response_bytes=response_limit,
+    )
+
+
+def _load_exa_fetch_config(table: dict[str, object], environment: Mapping[str, str]) -> ExaFetchConfig:
+    origin = "web_fetch"
+    _reject_unknown_keys(table, origin, {"provider", "api_key_env", "timeout_seconds", "max_content_chars",
+                                         "max_response_bytes", "exa"})
+    timeout = _required_positive_int(table, "timeout_seconds", origin)
+    options = load_exa_fetch_options(_required_table(table, "exa"), timeout)
+    content_limit = _required_positive_int(table, "max_content_chars", origin)
+    response_limit = _required_int_in_range(table, "max_response_bytes", origin, 1, MAX_WEB_RESPONSE_BYTES)
+    api_key_env = _required_string(table, "api_key_env", origin)
+    return ExaFetchConfig(
+        api_key=_required_secret(api_key_env, environment, f"{origin}.api_key_env"),
+        timeout_seconds=timeout, provider="exa", options=options,
+        max_content_chars=content_limit, max_response_bytes=response_limit,
+    )
 
 
 def _required_secret(
@@ -777,7 +824,7 @@ def _required_int_in_range(
 
 def _required_positive_int(data: dict[str, object], key: str, table_name: str) -> int:
     value = data.get(key)
-    if not isinstance(value, int) or value < 1:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise gear_error(
             "config_value_invalid",
             f"Missing or invalid positive integer value: {table_name}.{key}",

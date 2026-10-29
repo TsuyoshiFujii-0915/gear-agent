@@ -4,7 +4,7 @@ Select Exa search and fetch through the configured tool factory
 
 # Status
 
-accepted
+superseded by 0027-integrate-exa-with-web-provider-foundation.md
 
 # Context
 

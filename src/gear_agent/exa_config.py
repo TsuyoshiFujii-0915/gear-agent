@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 import re
 
@@ -25,113 +25,54 @@ class ExaFetchOptions:
     livecrawl_timeout_ms: int
 
 
-@dataclass(frozen=True)
-class ExaSearchConfig:
-    """Bounded search configuration with a non-displayable credential."""
-
-    api_key: str = field(repr=False)
-    timeout_seconds: int
-    max_results: int
-    max_content_chars: int
-    max_response_bytes: int
-    exa: ExaSearchOptions
-    provider: Literal["exa"] = field(default="exa", init=False)
-
-
-@dataclass(frozen=True)
-class ExaFetchConfig:
-    """Bounded single-page retrieval configuration."""
-
-    api_key: str = field(repr=False)
-    timeout_seconds: int
-    max_content_chars: int
-    max_response_bytes: int
-    exa: ExaFetchOptions
-    provider: Literal["exa"] = field(default="exa", init=False)
-
-
-def load_exa_search(table: dict[str, object], api_key: str) -> ExaSearchConfig:
-    """Validates TOML search options before any network request.
+def load_exa_search_options(options: dict[str, object]) -> ExaSearchOptions:
+    """Validates Exa search options before credentials are resolved.
 
     Args:
-        table: Selected web_search table.
-        api_key: Credential resolved from api_key_env.
+        options: Selected web_search.exa table.
 
     Returns:
-        Validated search configuration.
+        Validated provider-specific search options.
     """
     origin = "web_search"
-    _keys(table, {"provider", "api_key_env", "timeout_seconds", "max_results",
-                  "max_content_chars", "max_response_bytes", "exa"}, origin)
-    options = _options(table, origin)
     _keys(options, {"search_type", "content", "include_domains", "exclude_domains"}, f"{origin}.exa")
-    # These two defaults define the documented initial search mode, not error recovery.
+    # These defaults define the documented initial mode, not error recovery.
     search_type = options.get("search_type", "auto")
     if search_type != "auto":
         raise _invalid(f"{origin}.exa.search_type", "Only auto is supported.")
     content = options.get("content", "highlights")
     if content not in ("highlights", "text"):
         raise _invalid(f"{origin}.exa.content", "Expected highlights or text.")
-    return ExaSearchConfig(
-        api_key=api_key,
-        timeout_seconds=_positive(table, "timeout_seconds", origin),
-        max_results=_integer(table, "max_results", origin, 1, 100),
-        max_content_chars=_positive(table, "max_content_chars", origin),
-        max_response_bytes=_positive(table, "max_response_bytes", origin),
-        exa=ExaSearchOptions("auto", content, _domains(options, "include_domains"),
-                             _domains(options, "exclude_domains")),
-    )
+    return ExaSearchOptions("auto", content, _domains(options, "include_domains"),
+                            _domains(options, "exclude_domains"))
 
 
-def load_exa_fetch(table: dict[str, object], api_key: str) -> ExaFetchConfig:
-    """Validates TOML retrieval settings and the HTTP/server timeout budget.
+def load_exa_fetch_options(options: dict[str, object], timeout_seconds: int) -> ExaFetchOptions:
+    """Validates Exa freshness and server timeout against the HTTP budget.
 
     Args:
-        table: Selected web_fetch table.
-        api_key: Credential resolved from api_key_env.
+        options: Selected web_fetch.exa table.
+        timeout_seconds: HTTP timeout in seconds.
 
     Returns:
-        Validated single-URL retrieval configuration.
+        Validated provider-specific retrieval options.
     """
-    origin = "web_fetch"
-    _keys(table, {"provider", "api_key_env", "timeout_seconds", "max_content_chars",
-                  "max_response_bytes", "exa"}, origin)
-    options = _options(table, origin)
-    _keys(options, {"max_age_hours", "livecrawl_timeout_ms"}, f"{origin}.exa")
+    origin = "web_fetch.exa"
+    _keys(options, {"max_age_hours", "livecrawl_timeout_ms"}, origin)
     age = None
     if "max_age_hours" in options:
-        age = _integer(options, "max_age_hours", f"{origin}.exa", -1, 720)
-    timeout = _positive(table, "timeout_seconds", origin)
-    live_timeout = _integer(options, "livecrawl_timeout_ms", f"{origin}.exa", 1, 90000)
-    if live_timeout >= timeout * 1000:
-        raise _invalid(f"{origin}.exa.livecrawl_timeout_ms",
+        age = _integer(options, "max_age_hours", origin, -1, 720)
+    live_timeout = _integer(options, "livecrawl_timeout_ms", origin, 1, 90000)
+    if live_timeout >= timeout_seconds * 1000:
+        raise _invalid(f"{origin}.livecrawl_timeout_ms",
                        "Must be less than timeout_seconds converted to milliseconds.")
-    return ExaFetchConfig(
-        api_key=api_key, timeout_seconds=timeout,
-        max_content_chars=_positive(table, "max_content_chars", origin),
-        max_response_bytes=_positive(table, "max_response_bytes", origin),
-        exa=ExaFetchOptions(age, live_timeout),
-    )
-
-
-def _options(table: dict[str, object], origin: str) -> dict[str, object]:
-    value = table.get("exa")
-    if not isinstance(value, dict):
-        raise _invalid(f"{origin}.exa", "Expected an options table.")
-    return value
+    return ExaFetchOptions(age, live_timeout)
 
 
 def _keys(table: dict[str, object], allowed: set[str], origin: str) -> None:
     for key in table:
         if key not in allowed:
             raise _invalid(f"{origin}.{key}", "Unknown option.")
-
-
-def _positive(table: dict[str, object], key: str, origin: str) -> int:
-    value = table.get(key)
-    if type(value) is not int or value < 1:
-        raise _invalid(f"{origin}.{key}", "Expected a positive integer.")
-    return value
 
 
 def _integer(table: dict[str, object], key: str, origin: str, minimum: int, maximum: int) -> int:

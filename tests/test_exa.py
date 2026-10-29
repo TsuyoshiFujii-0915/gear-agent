@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 import json
 import re
+import socket
 import traceback
 
 import httpx
@@ -77,6 +78,11 @@ class ExaAPI:
 @pytest.fixture
 def api(monkeypatch: pytest.MonkeyPatch) -> ExaAPI:
     external = ExaAPI()
+
+    def public_dns(host: str, port: object, *, type: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", public_dns)
 
     def handle(transport: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
         external.calls.append(request)
@@ -311,8 +317,8 @@ def test_live_timeout_must_fit_http_budget(tmp_path: Path, timeout: int) -> None
 def test_defaults_and_provider_specific_option_conflicts(tmp_path: Path) -> None:
     search = SEARCH.replace('search_type = "auto"\n', '').replace('content = "highlights"\n', '')
     config, _ = configured(tmp_path, config_text(search, FETCH))
-    assert config.web_search.exa.search_type == "auto"
-    assert config.web_search.exa.content == "highlights"
+    assert config.web_search.options.search_type == "auto"
+    assert config.web_search.options.content == "highlights"
     with pytest.raises(GearError):
         configured(tmp_path, config_text(SEARCH.replace('[web_search.exa]', 'search_depth = "basic"\n[web_search.exa]'), FETCH))
 
