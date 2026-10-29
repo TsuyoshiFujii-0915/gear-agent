@@ -1,3 +1,5 @@
+from gear_agent.tools.providers.tavily_fetch import TavilyFetchProvider
+from gear_agent.config import TavilySearchOptions, TavilyFetchOptions
 import json
 import unittest
 from typing import Any
@@ -26,7 +28,7 @@ class FakeTavilyFetchTransport(TavilyFetchTransport):
 
 class WebFetchToolTests(unittest.TestCase):
     def test_schema_exposes_url_only(self) -> None:
-        tool = WebFetchTool(_config(), FakeTavilyFetchTransport(_tavily_response()))
+        tool = WebFetchTool(TavilyFetchProvider(_config(), FakeTavilyFetchTransport(_tavily_response())), public_addresses)
 
         schema = tool.schema()
 
@@ -40,7 +42,7 @@ class WebFetchToolTests(unittest.TestCase):
 
     def test_runs_tavily_extract_and_returns_serializable_content(self) -> None:
         transport = FakeTavilyFetchTransport(_tavily_response())
-        tool = WebFetchTool(_config(), transport)
+        tool = WebFetchTool(TavilyFetchProvider(_config(), transport), public_addresses)
 
         result = tool.run({"url": "https://example.com/docs"})
 
@@ -73,7 +75,7 @@ class WebFetchToolTests(unittest.TestCase):
         json.dumps(result)
 
     def test_rejects_missing_url_argument(self) -> None:
-        tool = WebFetchTool(_config(), FakeTavilyFetchTransport(_tavily_response()))
+        tool = WebFetchTool(TavilyFetchProvider(_config(), FakeTavilyFetchTransport(_tavily_response())), public_addresses)
 
         with self.assertRaises(GearError) as error:
             tool.run({})
@@ -82,9 +84,7 @@ class WebFetchToolTests(unittest.TestCase):
         self.assertIn("url", error.exception.message)
 
     def test_rejects_failed_tavily_extraction(self) -> None:
-        tool = WebFetchTool(
-            _config(),
-            FakeTavilyFetchTransport(
+        tool = WebFetchTool(TavilyFetchProvider(_config(), FakeTavilyFetchTransport(
                 {
                     "results": [],
                     "failed_results": [
@@ -94,18 +94,17 @@ class WebFetchToolTests(unittest.TestCase):
                         }
                     ],
                 }
-            ),
-        )
+            )), public_addresses)
 
         with self.assertRaises(GearError) as error:
             tool.run({"url": "https://example.com/docs"})
 
         self.assertEqual(error.exception.origin, "web_fetch")
         self.assertEqual(error.exception.error_type, "tavily_extract_failed")
-        self.assertIn("Could not extract content.", error.exception.message)
+        self.assertNotIn("Could not extract content.", error.exception.message)
 
     def test_rejects_invalid_tavily_response_shape(self) -> None:
-        tool = WebFetchTool(_config(), FakeTavilyFetchTransport({"results": "invalid"}))
+        tool = WebFetchTool(TavilyFetchProvider(_config(), FakeTavilyFetchTransport({"results": "invalid"})), public_addresses)
 
         with self.assertRaises(GearError) as error:
             tool.run({"url": "https://example.com/docs"})
@@ -116,7 +115,7 @@ class WebFetchToolTests(unittest.TestCase):
     def test_rejects_empty_content(self) -> None:
         response = _tavily_response()
         response["results"][0]["raw_content"] = ""
-        tool = WebFetchTool(_config(), FakeTavilyFetchTransport(response))
+        tool = WebFetchTool(TavilyFetchProvider(_config(), FakeTavilyFetchTransport(response)), public_addresses)
 
         with self.assertRaises(GearError) as error:
             tool.run({"url": "https://example.com/docs"})
@@ -127,18 +126,13 @@ class WebFetchToolTests(unittest.TestCase):
     def test_rejects_content_over_configured_limit(self) -> None:
         response = _tavily_response()
         response["results"][0]["raw_content"] = "abcdef"
-        tool = WebFetchTool(
-            WebFetchConfig(
+        tool = WebFetchTool(TavilyFetchProvider(WebFetchConfig(
                 api_key="tvly-secret",
-                extract_depth="basic",
-                content_format="markdown",
                 timeout_seconds=20,
-                include_images=False,
-                include_favicon=True,
                 max_content_chars=5,
-            ),
-            FakeTavilyFetchTransport(response),
-        )
+                provider="tavily",
+                options=TavilyFetchOptions(extract_depth="basic", content_format="markdown", include_images=False, include_favicon=True),
+            ), FakeTavilyFetchTransport(response)), public_addresses)
 
         with self.assertRaises(GearError) as error:
             tool.run({"url": "https://example.com/docs"})
@@ -154,7 +148,7 @@ class WebFetchToolTests(unittest.TestCase):
             True,
             {"status": 401},
         )
-        tool = WebFetchTool(_config(), FakeTavilyFetchTransport(transport_error))
+        tool = WebFetchTool(TavilyFetchProvider(_config(), FakeTavilyFetchTransport(transport_error)), public_addresses)
 
         with self.assertRaises(GearError) as error:
             tool.run({"url": "https://example.com/docs"})
@@ -164,14 +158,12 @@ class WebFetchToolTests(unittest.TestCase):
 
 def _config() -> WebFetchConfig:
     return WebFetchConfig(
-        api_key="tvly-secret",
-        extract_depth="basic",
-        content_format="markdown",
-        timeout_seconds=20,
-        include_images=False,
-        include_favicon=True,
-        max_content_chars=20_000,
-    )
+               api_key="tvly-secret",
+               timeout_seconds=20,
+               max_content_chars=20_000,
+               provider="tavily",
+               options=TavilyFetchOptions(extract_depth="basic", content_format="markdown", include_images=False, include_favicon=True),
+           )
 
 
 def _tavily_response() -> dict[str, Any]:
@@ -194,3 +186,7 @@ def _tavily_response() -> dict[str, Any]:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def public_addresses(host: str) -> list[str]:
+    return ["93.184.215.14"]

@@ -379,11 +379,11 @@ class ConfigTests(unittest.TestCase):
             if config.web_search is None:
                 raise AssertionError("web_search config should be present.")
             self.assertEqual(config.web_search.api_key, "tvly-secret")
-            self.assertEqual(config.web_search.search_depth, "basic")
+            self.assertEqual(config.web_search.options.search_depth, "basic")
             self.assertEqual(config.web_search.max_results, 5)
             self.assertEqual(config.web_search.timeout_seconds, 20)
-            self.assertTrue(config.web_search.include_answer)
-            self.assertFalse(config.web_search.include_raw_content)
+            self.assertTrue(config.web_search.options.include_answer)
+            self.assertFalse(config.web_search.options.include_raw_content)
             self.assertIsNone(config.web_fetch)
 
     def test_loads_enabled_tavily_web_fetch_config(self) -> None:
@@ -438,11 +438,11 @@ class ConfigTests(unittest.TestCase):
             if config.web_fetch is None:
                 raise AssertionError("web_fetch config should be present.")
             self.assertEqual(config.web_fetch.api_key, "tvly-secret")
-            self.assertEqual(config.web_fetch.extract_depth, "basic")
-            self.assertEqual(config.web_fetch.content_format, "markdown")
+            self.assertEqual(config.web_fetch.options.extract_depth, "basic")
+            self.assertEqual(config.web_fetch.options.content_format, "markdown")
             self.assertEqual(config.web_fetch.timeout_seconds, 20)
-            self.assertFalse(config.web_fetch.include_images)
-            self.assertTrue(config.web_fetch.include_favicon)
+            self.assertFalse(config.web_fetch.options.include_images)
+            self.assertTrue(config.web_fetch.options.include_favicon)
             self.assertEqual(config.web_fetch.max_content_chars, 20_000)
 
     def test_fails_when_web_search_enabled_without_config_table(self) -> None:
