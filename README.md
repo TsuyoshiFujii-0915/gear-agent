@@ -160,17 +160,29 @@ OpenAI、Bearer token認証を受け付けるAzure OpenAI、LM Studio等で同�
 event schemaが提供される場合はprovider固有分岐なしで処理します。未知の追加eventは無視しますが、`response.failed`、
 `response.incomplete`、`error`、成功terminal前のEOFは明示的なエラーになります。
 
+JSON / SSEとも、成功として利用する前に終了状態とerror情報を検証します。
+`incomplete` は `response_incomplete`、`failed` または非nullの `error` は
+`response_failed` として拒否します。`cancelled` / `queued` / `in_progress`、不明・不正型の
+status、成功状態と矛盾する `incomplete_details` も拒否します。途中の文章を最終回答として
+保存したり、不成功応答のツール呼び出しを実行したり、不完全な要約をcheckpointへ保存したり
+しません。未完了応答は空回答向けの再試行にも進みません。
+既存互換サーバー向けにJSONのstatus省略は維持しますが、`completed` を補いません。
+SSEは引き続き明示的な `response.completed` と `status = "completed"` が必要です。
+終了失敗の例外には固定メッセージと許可済みのcode/reasonのみを含め、providerの生のerror本文は含めません。
+
 `reasoning_replay` は `none` または `encrypted` を指定します。
-`none` は opaque な reasoning state を要求・再送しません。`encrypted` は Responses リクエストへ
-`include = ["reasoning.encrypted_content"]` 相当の指定を加え、暗号化された reasoning item を
+`none` は opaque な reasoning state を要求・再送しません。モデルのthinking停止や
+平文 `reasoning_text` の除去を意味しません。`encrypted` は Responses リクエストへ
+`include = ["reasoning.encrypted_content"]` 相当の指定を加え、opaqueなreasoning stateを
 手動履歴で再送します。既存の設定との互換性のため、設定欠落時は `none` として
 読み込みます。明示した未対応値は設定ロード時に失敗します。
 
-暗号化された state は、protocol、credential を除いた設定 endpoint URL の SHA-256
+opaqueなstateは、protocol、credential を除いた設定 endpoint URL の SHA-256
 identity、model ID が保存時と現在で完全一致する場合にだけ再利用されます。endpoint
 または model を変更した場合や、scope
 metadata を持たない旧JSONLセッションでは `encrypted_content` のみをモデル入力から除去し、
-reasoning summary、メッセージ、ツール履歴は維持します。保存済みJSONL自体は変更しません。
+平文reasoning content / summary、メッセージ、ツール履歴は維持します。保存済みJSONL自体は変更しません。
+scope検証の対象はopaqueフィールドであり、平文reasoningのモデル間互換性まで保証しません。
 query はendpoint identityに含めますが、設定した API key を含むquery componentは
 固定表現に置き換えてから計算します。そのため、Azure Responses API の `api-version`
 のようなqueryは利用でき、credential の派生値はscope metadataに残りません。userinfoと
@@ -178,6 +190,30 @@ fragment を含むendpoint URLは、`encrypted` の場合は設定エラーと�
 この設定は OpenAI Responses API の
 [`reasoning.encrypted_content`](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
 に対応しています。
+
+Strataでは専用adapterを追加せず、同じResponses経路を使用します。初期設定は次のように
+`reasoning_replay = "none"` を基本とします。URLとmodel IDは稼働中の環境に合わせてください。
+
+```toml
+[model]
+url = "http://localhost:8080/v1/responses"
+model = "<served-model-id>"
+api_key_env = ""
+reasoning_replay = "none"
+stream = false
+```
+
+確認範囲は [Strata v0.2.7のQwen系Responses実装](https://github.com/Niko1221/Strata/blob/v0.2.7/serve/responses.py)
+と[公開仕様](https://github.com/Niko1221/Strata/blob/v0.2.7/docs/DETAILS.md#the-responses-api-and-codex-cli)
+に基づく合成プロトコルfixtureです。GPU・実モデル・実APIキーによる接続検証ではなく、
+他のエンジンやモデルファミリーの動作保証でもありません。テストはJSON/SSE、平文reasoningを
+含む同一モデルでのツール往復・resume、scope付きopaque再送を対象にしています。
+このStrata実装の `encrypted_content` はBase64表現で、暗号化や機密性を保証しません。
+平文とopaqueの両方が返れば、`encrypted` 時の履歴には両方を保持し、両方をサイズ見積もりに含めます。
+Gear側でBase64を復号したり、reasoningを最終回答に変換したりしません。
+モデルや接続先を変更して検証する場合は新規セッションを基本にしてください。
+Gearの `type = "function", name = "web_search"` はGear側で実行する通常のツールであり、
+Strataが対応しないprovider-hostedな `type = "web_search"` とは別です。
 
 `[tool]` はモデルへ公開するツールを明示的に制御します。すべてのキーは必須の真偽値です。
 未定義のキー、欠けているキー、真偽値以外の値は設定エラーとして起動時に失敗します。
