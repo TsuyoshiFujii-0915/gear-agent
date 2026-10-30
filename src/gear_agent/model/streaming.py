@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from gear_agent.errors import gear_error
 from gear_agent.model.events import (
@@ -13,6 +13,7 @@ from gear_agent.model.events import (
     ModelReasoningTextDelta,
     ModelTextDelta,
 )
+from gear_agent.model.responses import response_failure_error, validate_response_completion
 
 
 @dataclass
@@ -94,15 +95,10 @@ class ResponsesStreamAssembler:
         if event_type == "response.incomplete":
             self._raise_terminal_response_error("response_incomplete", event)
         if event_type == "error":
-            raise gear_error(
+            raise response_failure_error(
                 "response_stream_error",
-                "Model endpoint emitted a stream error event.",
+                {'error': event},
                 "responses_stream",
-                True,
-                {
-                    "code": event.get("code"),
-                    "message": event.get("message"),
-                },
             )
 
     def finish(self) -> dict[str, Any]:
@@ -229,12 +225,8 @@ class ResponsesStreamAssembler:
         if not isinstance(response, dict):
             raise _event_error("Completed event lacks a response object.", event)
         terminal_response = deepcopy(response)
-        status = terminal_response.get("status")
-        if status == "failed":
-            self._raise_terminal_response_error("response_failed", event)
-        if status == "incomplete":
-            self._raise_terminal_response_error("response_incomplete", event)
-        if status != "completed":
+        validate_response_completion(terminal_response, 'responses_stream')
+        if 'status' not in terminal_response:
             raise _event_error(
                 "Completed event response status is not completed.",
                 event,
@@ -265,28 +257,18 @@ class ResponsesStreamAssembler:
                 for index in sorted(self._completed_items)
             ]
             self._completed_response = assembled
+        validate_response_completion(self._completed_response, 'responses_stream')
         self._terminal_received = True
 
     def _raise_terminal_response_error(
         self,
-        error_type: str,
+        error_type: Literal['response_failed', 'response_incomplete'],
         event: dict[str, Any],
     ) -> None:
         response = event.get("response")
         if not isinstance(response, dict):
             raise _event_error("Terminal event lacks a response object.", event)
-        raise gear_error(
-            error_type,
-            f"Model response terminated with status {response.get('status')}.",
-            "responses_stream",
-            True,
-            {
-                "response_id": response.get("id"),
-                "status": response.get("status"),
-                "error": response.get("error"),
-                "incomplete_details": response.get("incomplete_details"),
-            },
-        )
+        raise response_failure_error(error_type, response, 'responses_stream')
 
     def _required_item_state(
         self,

@@ -9,6 +9,7 @@ from gear_agent.model.events import (
     ModelProgressEventSink,
     SilentModelProgressEventSink,
 )
+from gear_agent.model.responses import validate_response_completion
 from gear_agent.model.streaming import ResponsesStreamAssembler
 from gear_agent.model.transport import HttpTransport
 
@@ -135,12 +136,14 @@ class ModelClient:
             payload["tool_choice"] = "auto"
 
         if not config.stream:
-            return self._transport.post_json(
+            response = self._transport.post_json(
                 config.url,
                 headers,
                 payload,
                 timeout_seconds,
             )
+            validate_response_completion(response, 'model_client')
+            return response
         if stream_idle_timeout_seconds is None:
             raise gear_error(
                 "stream_idle_timeout_missing",

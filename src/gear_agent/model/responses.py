@@ -1,10 +1,82 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 import json
 
-from gear_agent.errors import gear_error
+from gear_agent.errors import GearError, gear_error
 from gear_agent.model.types import FunctionCall
+
+
+def validate_response_completion(response: dict[str, Any], origin: str) -> None:
+    """Rejects unsuccessful Responses objects before their output can be used.
+
+    Missing status is deliberately accepted for legacy JSON-compatible servers;
+    it is never replaced with a fabricated completed status. The SSE caller
+    additionally requires an explicit completed terminal event.
+
+    Args:
+        response: Parsed or assembled response, not an intermediate snapshot.
+        origin: Model component reporting the failure.
+
+    Raises:
+        GearError: If status or error metadata prevents successful completion.
+    """
+    status = response.get('status')
+    if status == 'incomplete':
+        raise response_failure_error('response_incomplete', response, origin)
+    if status == 'failed':
+        raise response_failure_error('response_failed', response, origin)
+    if 'status' in response and status != 'completed':
+        details: dict[str, object] = {'reason': 'invalid_status'}
+        if isinstance(status, str) and status in ('cancelled', 'queued', 'in_progress'):
+            details['status'] = status
+        raise gear_error(
+            'response_status_invalid', 'Model response status is not completed.',
+            origin, True, details,
+        )
+    if response.get('error') is not None:
+        raise response_failure_error('response_failed', response, origin)
+    if response.get('incomplete_details') is not None:
+        raise gear_error(
+            'response_status_invalid', 'Model response has conflicting incomplete details.',
+            origin, True, {'reason': 'conflicting_incomplete_details'},
+        )
+
+
+def response_failure_error(
+    error_type: Literal['response_failed', 'response_incomplete', 'response_stream_error'],
+    response: dict[str, Any], origin: str,
+) -> GearError:
+    """Builds a failure diagnostic without copying arbitrary provider content.
+
+    Args:
+        error_type: Category established by response status or SSE event type.
+        response: Provider object from which only allowlisted values are read.
+        origin: Model component reporting the failure.
+
+    Returns:
+        Structured error containing a fixed message and safe code/reason values.
+    """
+    messages = {
+        'response_failed': 'Model response failed.',
+        'response_incomplete': 'Model response is incomplete.',
+        'response_stream_error': 'Model endpoint emitted a stream error event.',
+    }
+    details: dict[str, object] = {}
+    error = response.get('error')
+    if isinstance(error, dict):
+        code = error.get('code')
+        if isinstance(code, str) and code in (
+            'server_error', 'rate_limit_exceeded', 'invalid_prompt',
+            'vector_store_timeout', 'invalid_request_error', 'model_not_found',
+        ):
+            details['code'] = code
+    incomplete = response.get('incomplete_details')
+    if isinstance(incomplete, dict):
+        reason = incomplete.get('reason')
+        if isinstance(reason, str) and reason in ('max_output_tokens', 'content_filter'):
+            details['reason'] = reason
+    return gear_error(error_type, messages[error_type], origin, True, details)
 
 
 def extract_output_text(response: dict[str, Any]) -> str:
