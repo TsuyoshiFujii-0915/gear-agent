@@ -4,7 +4,7 @@ from typing import Any
 import json
 
 from gear_agent.config import ModelConfig, ReasoningReplayMode
-from gear_agent.errors import gear_error
+from gear_agent.errors import GearError, gear_error
 from gear_agent.model.events import (
     ModelProgressEventSink,
     SilentModelProgressEventSink,
@@ -12,6 +12,23 @@ from gear_agent.model.events import (
 from gear_agent.model.responses import validate_response_completion
 from gear_agent.model.streaming import ResponsesStreamAssembler
 from gear_agent.model.transport import HttpTransport
+
+
+def response_generation_options(config: ModelConfig) -> dict[str, object]:
+    """Projects explicit generation settings into Responses request fields.
+
+    Args:
+        config: Validated model settings shared by ordinary and summary requests.
+
+    Returns:
+        Only configured fields, with no nulls or inferred server defaults.
+    """
+    options: dict[str, object] = {}
+    if config.reasoning_effort is not None:
+        options['reasoning'] = {'effort': config.reasoning_effort}
+    if config.max_output_tokens is not None:
+        options['max_output_tokens'] = config.max_output_tokens
+    return options
 
 
 class ModelClient:
@@ -119,6 +136,33 @@ class ModelClient:
         stream_idle_timeout_seconds: float | None,
         progress_sink: ModelProgressEventSink,
     ) -> dict[str, Any]:
+        try:
+            return self._send_response(
+                config, input_value, tools, instructions, timeout_seconds,
+                stream_idle_timeout_seconds, progress_sink,
+            )
+        except GearError as error:
+            if (error.error_type == 'http_status_error' and error.details.get('status') == 400
+                    and response_generation_options(config)):
+                raise gear_error(
+                    'http_status_error',
+                    'Model endpoint returned HTTP 400. Check endpoint support and configured values for '
+                    'model.reasoning_effort and model.max_output_tokens; change or omit unsupported settings explicitly. '
+                    'The request was not retried.',
+                    'model_client', True, {'status': 400},
+                ) from None
+            raise
+
+    def _send_response(
+        self,
+        config: ModelConfig,
+        input_value: object,
+        tools: list[dict[str, object]],
+        instructions: str,
+        timeout_seconds: float,
+        stream_idle_timeout_seconds: float | None,
+        progress_sink: ModelProgressEventSink,
+    ) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if config.api_key is not None:
             headers["Authorization"] = f"Bearer {config.api_key}"
@@ -129,6 +173,7 @@ class ModelClient:
             "instructions": instructions,
             "stream": config.stream,
         }
+        payload.update(response_generation_options(config))
         if config.reasoning_replay is ReasoningReplayMode.ENCRYPTED:
             payload["include"] = ["reasoning.encrypted_content"]
         if len(tools) > 0:

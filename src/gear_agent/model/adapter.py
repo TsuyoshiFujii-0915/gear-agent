@@ -56,6 +56,11 @@ class ModelAdapter(Protocol):
     """Configured model execution over manually managed canonical history."""
 
     @property
+    def generation_options(self) -> dict[str, object]:
+        """Returns validated generation fields sent on every request for accounting."""
+        ...
+
+    @property
     def capabilities(self) -> ModelCapabilities:
         """Returns implemented operations without contacting the provider."""
         ...

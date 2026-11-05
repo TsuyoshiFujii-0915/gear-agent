@@ -177,6 +177,36 @@ SSEは引き続き明示的な `response.completed` と `status = "completed"` �
 手動履歴で再送します。既存の設定との互換性のため、設定欠落時は `none` として
 読み込みます。明示した未対応値は設定ロード時に失敗します。
 
+`reasoning_effort` と `max_output_tokens` は任意の生成設定です。たとえば既存の
+`[model]` に次を追加できます。値は設定例であり、Gearの新しいデフォルトではありません。
+
+```toml
+reasoning_effort = "medium"
+max_output_tokens = 8192
+```
+
+`reasoning_effort` は `none / minimal / low / medium / high / xhigh` のいずれかを
+指定します。指定時だけ Responses の `"reasoning": {"effort": "medium"}` の形で送り、
+サーバーやモデルがすべての値を受け付けるとは保証しません。値の置換やモデル名からの
+推定は行いません。`reasoning_replay` とは独立した設定で、replayの `none` はthinking停止を
+意味しません。effortは推論量の指定であり、ハードなトークン上限・処理時間保証ではなく、
+Gearの接続・stream idle timeoutも変更しません。
+
+`max_output_tokens` は正の整数を指定し、同名のResponsesフィールドへ送ります。
+bool・文字列・小数・0・負数は設定エラーです。上限には出力に加えて推論トークンも含まれます。
+Strata固有の0/-1による無制限指定は使用できません。両設定とも省略時は `None` として扱い、
+対応フィールドを送信しません。nullや空のreasoningオブジェクトも追加しません。
+省略は生成量0を意味せず、サーバー既定値やモデル容量も推測しません。
+
+JSON・SSE、通常回答・手動 `/compact`・自動要約・Jevの明示的なsummary fallbackは、
+同じmodel設定を継承します。短い共通上限では要約も `incomplete` になり得ます。
+その場合はcheckpointを保存せずエラーにし、fallbackも成功扱いにしません。
+要約だけ上限を増大・解除したり、effortを変更したりする処理はありません。
+これらの設定を送った要求がHTTP 400になった場合は、設定を確認・変更するための
+安全な診断を返します。設定の除去・別値への変更による再試行やChat APIへの切り替えは行いません。
+APIの詳細は [Responsesの推論トークンと出力上限](https://developers.openai.com/api/docs/guides/reasoning#controlling-costs)
+を参照してください。
+
 opaqueなstateは、protocol、credential を除いた設定 endpoint URL の SHA-256
 identity、model ID が保存時と現在で完全一致する場合にだけ再利用されます。endpoint
 または model を変更した場合や、scope
@@ -605,6 +635,11 @@ max_input_tokens = 80000
 使います。これらは既存設定を維持するための明示的な規則で、容量不明のモデルに上限値を
 割り当てるものではありません。
 
+`auto_compaction = true` と明示的な `model.max_output_tokens` を併用するときは、
+`reserved_tokens >= max_output_tokens` が必須です。予約量が小さければ送信前に設定エラーにし、
+予約量や上限を自動変更しません。上限未指定では予約量との比較は行わず、サーバー側の
+既定生成量をカバーできると推測しません。
+
 各モデル反復の直前に、アダプターへ渡す実際の入力・指示・ツール定義を
 `ContextBudgetManager` が計測します。基本指示、現在のリポジトリ指示、
 履歴・チェックポイント、実際に再送する推論情報、ツール呼び出しと結果、
@@ -617,6 +652,12 @@ max_input_tokens = 80000
 状態の実際の消費量を保証するものではありません。外部トークナイザーへの通信や、
 前回レスポンスのusageを次回入力サイズとして使う処理はありません。
 見積もり方式と容量判定は `TokenEstimator` インターフェースで分離しています。
+明示した生成設定のJSONフィールドも、実送信と共通の表現を同じ推定器で計測し、
+`request_overhead` に加算します。この入力オーバーヘッドは出力・推論用の
+`reserved_headroom` とは別です。設定未指定では従来の見積もりを維持します。
+有効設定metadataと `run.json.model` の `reasoning_effort` / `max_output_tokens` は、
+省略をnull、明示値をその値として記録します。これは送信する設定の記録であり、providerが
+受理・実行した証拠やusageではありません。認証情報は記録しません。
 
 入力予算を超えると、その反復で一度だけ既存のテキスト要約を行います。
 最新チェックポイント以降の有効なセッション内容を要約し、現在のユーザー入力を

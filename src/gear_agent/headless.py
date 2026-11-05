@@ -117,6 +117,8 @@ def describe_run(agent: AgentRuntime, session_id: str, prompt: TaskPrompt) -> Ru
             'endpoint_identity': endpoint_identity(public_endpoint, config.model.api_key),
             'stream': config.model.stream,
             'reasoning_replay': config.model.reasoning_replay.value,
+            'reasoning_effort': config.model.reasoning_effort,
+            'max_output_tokens': config.model.max_output_tokens,
         },
         adapter_kind=type(agent.adapter).__name__,
         capabilities=asdict(agent.adapter.capabilities),

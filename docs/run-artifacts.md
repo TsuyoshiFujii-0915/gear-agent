@@ -56,6 +56,10 @@ attempting a failure snapshot. Failed streams never become `final.txt`.
 - `adapter_kind`, `capabilities`, `model`: adapter class, operation capabilities,
   model ID, protocol, streaming/replay mode, sanitized endpoint and SHA-256 of
   that sanitized endpoint. This artifact fingerprint is not a replay credential.
+  `reasoning_effort` and `max_output_tokens` record explicit model generation
+  settings, with null meaning the field is omitted from requests. The values
+  apply to ordinary answers and all summaries; they do not establish provider
+  acceptance, actual effort, or usage. Older manifests may lack these keys.
   `reasoning_replay_scope` records protocol/model and the actual adapter scope
   fingerprint only when endpoint sanitization leaves the configured URL intact;
   otherwise its fingerprint is null and `endpoint_identity_omitted` is true.
