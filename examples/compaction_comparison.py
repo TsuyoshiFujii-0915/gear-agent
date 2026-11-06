@@ -183,10 +183,25 @@ def interaction_changes(before: list[dict[str, Any]], after: list[dict[str, Any]
     return rows
 
 
-def measurements(items: list[dict[str, Any]], tools: list[dict[str, object]], instructions: str) -> dict[str, int]:
-    """Measures comparable effective inputs without claiming an actual tokenizer count."""
+def measurements(
+    items: list[dict[str, Any]], tools: list[dict[str, object]], instructions: str,
+    generation_options: dict[str, object],
+) -> dict[str, int]:
+    """Measures effective inputs using the main adapter's generation settings.
+
+    Args:
+        items: Model-visible replay items, including the pending user message.
+        tools: Tool schemas included in the measured request.
+        instructions: Effective model instructions.
+        generation_options: Explicit request fields from the configured adapter.
+
+    Returns:
+        Input sizes and a request estimate, not an actual tokenizer count.
+    """
     request = ContextRequest(items, tools, instructions, instructions, len(items) - 1)
-    diagnostic = ContextBudgetManager(DISABLED_CONTEXT_BUDGET, ByteTokenEstimator()).evaluate(request)
+    diagnostic = ContextBudgetManager(
+        DISABLED_CONTEXT_BUDGET, ByteTokenEstimator(), generation_options,
+    ).evaluate(request)
     return {'input_items': len(items),
             'input_json_bytes': len(json.dumps(items, ensure_ascii=False, separators=(',', ':')).encode('utf-8')),
             'estimated_request_tokens': diagnostic.total_estimated_request_tokens}
@@ -300,7 +315,7 @@ def run(config_path: Path, directory: Path, jev_model: str, jev_timeout: int, so
             'code_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=project, text=True).strip(),
             'model': config.model.model, 'jev_model': jev_model, 'policy': asdict(DEFAULT_JEV_POLICY),
             'jev_timeout_seconds': jev_timeout, 'main_timeout_seconds': config.runtime.model_timeout_seconds,
-            'baseline': measurements(before, [tool.schema()], instructions),
+            'baseline': measurements(before, [tool.schema()], instructions, adapter.generation_options),
             'scope': 'strategy comparison at the start of a user turn; no automatic trigger or continuation quality test',
         }
         write_json(directory / 'results.json', results)
@@ -312,7 +327,9 @@ def run(config_path: Path, directory: Path, jev_model: str, jev_timeout: int, so
             service = CompactionService(adapter, ObservationLog(output / 'observations.jsonl'))
             if name == 'summary':
                 write_json(output / 'request.json', asdict(service.prepare_request(events)))
-                strategy = SummaryCompactionStrategy(service, ContextBudgetManager(DISABLED_CONTEXT_BUDGET, ByteTokenEstimator()))
+                strategy = SummaryCompactionStrategy(service, ContextBudgetManager(
+                    DISABLED_CONTEXT_BUDGET, ByteTokenEstimator(), adapter.generation_options,
+                ))
             else:
                 strategy = JevCompactionStrategy(jev_config, RecordingJev(JevClient(jev_config), output))
             started = perf_counter()
@@ -326,7 +343,7 @@ def run(config_path: Path, directory: Path, jev_model: str, jev_timeout: int, so
                 (output / 'summary.txt').write_text(candidate.payload['text'], encoding='utf-8')
             (output / 'source.jsonl').write_bytes(original_bytes)
             JsonlContextStore(output).append('source', candidate.kind, candidate.payload)
-            measured = measurements(items, [tool.schema()], instructions)
+            measured = measurements(items, [tool.schema()], instructions, adapter.generation_options)
             results[name] = {**measured, 'duration_seconds': duration, 'strategy_metrics': candidate.metrics,
                              'reduction_ratio': 1 - measured['estimated_request_tokens'] / results['baseline']['estimated_request_tokens'],
                              'interactions': interaction_changes(before, items)}
