@@ -50,12 +50,12 @@ def run_case(
         Measured selection, metrics and per-interaction changes.
     """
     before = build_model_history(events, adapter.replay_policy).items
-    baseline = measurements(before, schemas, instructions)
+    baseline = measurements(before, schemas, instructions, adapter.generation_options)
     started = perf_counter()
     candidate = JevCompactionStrategy(config, evaluator).compact(events, config.timeout_seconds, None)
     elapsed = perf_counter() - started
     after = checkpoint_input(adapter, candidate, current)
-    measured = measurements(after, schemas, instructions)
+    measured = measurements(after, schemas, instructions, adapter.generation_options)
     write_json(output / 'checkpoint.json', asdict(candidate))
     write_json(output / 'model-input.json', after)
     row = {'threshold': config.policy.keep_threshold, 'duration_seconds': elapsed,
@@ -137,7 +137,8 @@ def main() -> None:
         result: dict[str, Any] = {'source_sha256': sha256(raw).hexdigest(),
             'source_run': str(args.source_run.resolve()), 'model': config.model.model,
             'jev_model': args.jev_model, 'jev_timeout_seconds': args.jev_timeout,
-            'base_policy': asdict(DEFAULT_JEV_POLICY), 'baseline': measurements(baseline, schemas, instructions),
+            'base_policy': asdict(DEFAULT_JEV_POLICY),
+            'baseline': measurements(baseline, schemas, instructions, adapter.generation_options),
             'code_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=project, text=True).strip(),
             'runner_sha256': sha256(Path(__file__).read_bytes()).hexdigest(), 'cases': []}
         for jev_config in configs:

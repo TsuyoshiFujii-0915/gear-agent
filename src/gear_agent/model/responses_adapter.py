@@ -8,7 +8,7 @@ from gear_agent.model.types import FunctionCall, ModelHistory, ModelUsage
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import gear_error
 from gear_agent.model.adapter import ModelCapabilities
-from gear_agent.model.client import ModelClient
+from gear_agent.model.client import ModelClient, response_generation_options
 from gear_agent.model.events import ModelProgressEventSink
 from gear_agent.model.replay import (
     ReasoningReplayPolicy, ReplayedOutput, model_response_event_payload,
@@ -85,6 +85,11 @@ class ResponsesModelResponse:
 
 class ResponsesModelAdapter:
     """Executes the existing Responses path for one effective configuration."""
+
+    @property
+    def generation_options(self) -> dict[str, object]:
+        """Returns the same explicit fields used by JSON and SSE dispatch."""
+        return response_generation_options(self._config)
 
     def __init__(self, client: ModelClient, config: ModelConfig) -> None:
         """Binds model communication and replay identity.

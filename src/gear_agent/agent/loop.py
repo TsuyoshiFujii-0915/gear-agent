@@ -107,7 +107,10 @@ class AgentLoop:
         self._event_sink = event_sink
         self._repository_context = repository_context
         self._context_budget = context_budget
-        self._budget_manager = ContextBudgetManager(context_budget, ByteTokenEstimator())
+        self._budget_manager = ContextBudgetManager(
+            context_budget, ByteTokenEstimator(),
+            adapter.generation_options if context_budget.auto_compaction else None,
+        )
         self._observer = observer
         self._compaction = CompactionService(adapter, observer)
         self._compaction_config = compaction_config

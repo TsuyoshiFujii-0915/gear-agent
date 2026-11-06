@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Protocol
+from typing import Mapping, Protocol, cast
 import json
 
 from gear_agent.errors import GearError, gear_error
@@ -48,6 +48,20 @@ class ContextBudgetConfig:
 
 
 DISABLED_CONTEXT_BUDGET = ContextBudgetConfig(False, None, 0, None)
+
+
+def validate_output_reserve(config: ContextBudgetConfig, max_output_tokens: int | None) -> None:
+    """Checks that an explicit generation cap fits the automatic reserve.
+
+    Args:
+        config: Validated context policy.
+        max_output_tokens: Validated output cap; None leaves server capacity unknown.
+
+    Raises:
+        GearError: If automatic management reserves less than the explicit cap.
+    """
+    if config.auto_compaction and max_output_tokens is not None and config.reserved_tokens < max_output_tokens:
+        raise _config_error('reserved_tokens', 'Must be at least model.max_output_tokens when auto_compaction is enabled.')
 
 
 @dataclass(frozen=True)
@@ -150,9 +164,22 @@ def context_budget_error(diagnostic: ContextBudgetDiagnostic, phase: str) -> Gea
 class ContextBudgetManager:
     """Applies explicit capacity policy to the effective request representation."""
 
-    def __init__(self, config: ContextBudgetConfig, estimator: TokenEstimator) -> None:
+    def __init__(
+        self, config: ContextBudgetConfig, estimator: TokenEstimator,
+        request_options: Mapping[str, object] | None = None,
+    ) -> None:
+        """Binds accounting to the adapter's validated generation fields.
+
+        Args:
+            config: Explicit context policy.
+            estimator: Estimator for actual serialized request components.
+            request_options: Fields sent by the adapter on every request. Omitted
+                by legacy callers without generation options, preserving estimates.
+        """
         self._config = config
         self._estimator = estimator
+        self._request_options = dict(request_options) if request_options is not None else {}
+        validate_output_reserve(config, cast(int | None, self._request_options.get('max_output_tokens')))
 
     def evaluate(self, request: ContextRequest) -> ContextBudgetDiagnostic:
         """Measures an agent request against the configured compaction trigger.
@@ -211,6 +238,8 @@ class ContextBudgetManager:
             current = 0
         schemas = estimate(request.tools) if request.tools else 0
         overhead = 256
+        if self._request_options:
+            overhead += estimate(self._request_options)
         total = instructions + repository + history + current + schemas + overhead
         return ContextBudgetDiagnostic(
             instructions, repository, history, schemas, current, overhead,

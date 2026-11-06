@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping, cast, get_args
 from urllib.parse import urlsplit
 import tomllib
 
 from gear_agent.errors import GearError, gear_error
 from gear_agent.treg_config import TregSearchOptions, TregFetchOptions
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
-from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET
+from gear_agent.context_budget import ContextBudgetConfig, DISABLED_CONTEXT_BUDGET, validate_output_reserve
 from gear_agent.exa_config import (
     ExaFetchOptions, ExaSearchOptions, load_exa_fetch_options, load_exa_search_options,
 )
@@ -73,6 +73,9 @@ class ReasoningReplayMode(str, Enum):
     ENCRYPTED = "encrypted"
 
 
+ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     """Model endpoint configuration.
@@ -83,6 +86,9 @@ class ModelConfig:
         api_key: Bearer token value, or None when no auth header should be sent.
         reasoning_replay: Explicit opaque reasoning replay mode.
         stream: Whether to request an SSE response stream.
+        reasoning_effort: Explicit effort, or None to omit the request field.
+        max_output_tokens: Positive output/reasoning cap, or None to omit it.
+            Both generation defaults preserve legacy TOML and direct callers.
     """
 
     url: str
@@ -90,9 +96,36 @@ class ModelConfig:
     api_key: str | None
     reasoning_replay: ReasoningReplayMode
     stream: bool = False
+    reasoning_effort: ReasoningEffort | None = None
+    max_output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         _validate_reasoning_replay_url(self.url, self.reasoning_replay)
+        _validate_reasoning_effort(self.reasoning_effort)
+        _validate_max_output_tokens(self.max_output_tokens)
+
+
+def _validate_reasoning_effort(value: object) -> ReasoningEffort | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in get_args(ReasoningEffort):
+        raise gear_error(
+            'config_value_invalid',
+            'Invalid model.reasoning_effort: Expected none, minimal, low, medium, high or xhigh.',
+            'config', True, {'table': 'model', 'key': 'reasoning_effort'},
+        )
+    return cast(ReasoningEffort, value)
+
+
+def _validate_max_output_tokens(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < 1:
+        raise gear_error(
+            'config_value_invalid', 'Invalid model.max_output_tokens: Expected a positive integer.',
+            'config', True, {'table': 'model', 'key': 'max_output_tokens'},
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -254,6 +287,9 @@ class AppConfig:
     context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET
     compaction: CompactionConfig = SUMMARY_COMPACTION
 
+    def __post_init__(self) -> None:
+        validate_output_reserve(self.context_budget, self.model.max_output_tokens)
+
 
 def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
     """Loads Gear Agent configuration from TOML.
@@ -345,6 +381,8 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
             api_key=api_key,
             reasoning_replay=reasoning_replay,
             stream=stream,
+            reasoning_effort=_validate_reasoning_effort(model_table.get('reasoning_effort')),
+            max_output_tokens=_validate_max_output_tokens(model_table.get('max_output_tokens')),
         ),
         runtime,
         tool,
