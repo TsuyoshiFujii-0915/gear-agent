@@ -152,22 +152,34 @@ def _run_model_check(args: Namespace, environment: Mapping[str, str]) -> int:
                 raise GearError("invalid_timeout", "Expected a positive model timeout.", "model_check", True, {})
             config = replace(config, timeout_seconds=args.model_timeout_seconds)
         code, report = run_model_check(config, args.profile, args.infer, args.deadline_seconds, environment)
-    except (GearError, UnicodeError, ValueError) as exc:
-        error = {"type": "config_value_invalid"}
-        if isinstance(exc, GearError):
-            error = {"type": exc.error_type, "origin": exc.origin}
-            # Only schema-defined names and fixed validation messages may be printed.
-            key = exc.details.get("key")
-            if key in ("url", "model", "api_key_env", "reasoning_replay", "stream", "reasoning_effort",
-                       "max_output_tokens", "model_timeout_seconds", "model_stream_idle_timeout_seconds",
-                       "auto_compaction", "context_window_tokens", "reserved_tokens", "max_input_tokens"):
-                error["field"] = f"{exc.details['table']}.{key}"
-                error["message"] = exc.message
-            elif exc.error_type == "config_secret_missing":
-                error["field"] = "model.api_key_env"
-        code, report = 1, {"schema_version": 1, "error": error}
+    except GearError as exc:
+        code, report = 1, {"schema_version": 1, "error": _model_check_error(exc)}
+    except ValueError:
+        code, report = 1, {"schema_version": 1, "error": {"type": "config_value_invalid"}}
     print(json.dumps(report) if args.json else format_report(report))
     return code
+
+
+_MODEL_CHECK_FIELDS = {
+    "model": {"url", "model", "api_key_env", "reasoning_replay", "stream", "reasoning_effort", "max_output_tokens"},
+    "runtime": {"model_timeout_seconds", "model_stream_idle_timeout_seconds"},
+    "context_budget": {"auto_compaction", "context_window_tokens", "reserved_tokens", "max_input_tokens"},
+}
+
+
+def _model_check_error(exc: GearError) -> dict[str, str]:
+    """Projects only known table names and qualified fields from config errors."""
+    error = {"type": exc.error_type, "origin": exc.origin}
+    if exc.error_type == "config_secret_missing":
+        error["field"] = "model.api_key_env"
+    elif exc.error_type == "config_value_invalid":
+        key = exc.details.get("key")
+        table = exc.details.get("table")
+        if table is None and isinstance(key, str) and key in _MODEL_CHECK_FIELDS:
+            error.update(table=key, message=exc.message)
+        elif isinstance(table, str) and table in _MODEL_CHECK_FIELDS and key in _MODEL_CHECK_FIELDS[table]:
+            error.update(field=f"{table}.{key}", message=exc.message)
+    return error
 
 
 def _prepare_runtime(

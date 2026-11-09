@@ -56,3 +56,29 @@ def test_profile_skips_uninferable_metadata(endpoint: Endpoint, tmp_path: Path, 
     _, report = check(config(tmp_path / 'c', endpoint.base + suffix, False), '--profile', 'maya')
     assert 'metadata_prefix_unknown' in report['warnings']
     assert [r[0] for r in endpoint.requests] == ['HEAD']
+
+
+@pytest.mark.parametrize('toml', ['[runtime]\nmodel_timeout_seconds = 10\n', 'model = "secret-provider-error"\n'])
+@pytest.mark.parametrize('output_args', [(), ('--json',)], ids=['text', 'json'])
+def test_invalid_model_table_reports_config_error(tmp_path: Path, toml: str, output_args: tuple[str, ...]) -> None:
+    path = tmp_path / 'gear.toml'
+    path.write_text(toml)
+    result = subprocess.run([sys.executable, '-m', 'gear_agent.cli', '--config', str(path), 'model', 'check',
+                             *output_args], capture_output=True, text=True, timeout=8)
+    assert result.returncode == 1 and result.stderr == ''
+    assert 'secret-provider-error' not in result.stdout
+    if output_args:
+        report = json.loads(result.stdout)
+        assert report['schema_version'] == 1
+        assert report['error']['type'] == 'config_value_invalid'
+        assert report['error']['table'] == 'model'
+    else:
+        assert 'config_value_invalid' in result.stdout and '[model]' in result.stdout
+
+
+def test_model_field_in_wrong_table_is_not_projected(tmp_path: Path) -> None:
+    path = config(tmp_path / 'gear.toml', 'http://localhost/v1/responses', False)
+    path.write_text(path.read_text() + 'model = "secret-provider-error"\n')
+    code, report = check(path)
+    assert code == 1
+    assert report['error'] == {'type': 'config_value_invalid', 'origin': 'config'}
