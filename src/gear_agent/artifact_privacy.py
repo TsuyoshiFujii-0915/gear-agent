@@ -26,19 +26,13 @@ _ASSIGNMENT = re.compile(
 )
 
 
-class ArtifactPrivacy:
-    """Central policy for safe artifact metadata, diagnostics and session copies."""
+class CredentialRedactor:
+    """Redacts known credentials and credential syntax from diagnostic text."""
 
-    def __init__(self, config: AppConfig, environment: Mapping[str, str]) -> None:
-        values = [config.model.api_key]
-        if config.compaction.jev is not None:
-            values.append(config.compaction.jev.api_key)
-        if config.web_search is not None:
-            values.append(config.web_search.api_key)
-        if config.web_fetch is not None:
-            values.append(config.web_fetch.api_key)
+    def __init__(self, url: str, values: list[str | None], environment: Mapping[str, str]) -> None:
+        values = list(values)
         values.extend(value for key, value in environment.items() if _CREDENTIAL_KEY.search(key))
-        endpoint = urlsplit(config.model.url)
+        endpoint = urlsplit(url)
         values.extend((endpoint.username, endpoint.password, endpoint.fragment))
         values.extend(value for key, value in parse_qsl(endpoint.query) if _CREDENTIAL_KEY.search(key))
         secrets = {value for value in values if value}
@@ -59,6 +53,20 @@ class ArtifactPrivacy:
             value = value.replace(secret, '[REDACTED]')
         value = _HEADER.sub(r'\1[REDACTED]', value)
         return _ASSIGNMENT.sub(r'\1[REDACTED]', value)
+
+
+class ArtifactPrivacy(CredentialRedactor):
+    """Central policy for safe artifact metadata, diagnostics and session copies."""
+
+    def __init__(self, config: AppConfig, environment: Mapping[str, str]) -> None:
+        values = [config.model.api_key]
+        if config.compaction.jev is not None:
+            values.append(config.compaction.jev.api_key)
+        if config.web_search is not None:
+            values.append(config.web_search.api_key)
+        if config.web_fetch is not None:
+            values.append(config.web_fetch.api_key)
+        super().__init__(config.model.url, values, environment)
 
     def serialize(self, value: Any) -> Any:
         """Copies JSON values with credential fields and text centrally redacted.
