@@ -218,6 +218,25 @@ def test_inference_failure(endpoint: Endpoint, tmp_path: Path, route: tuple[int,
     assert len([r for r in endpoint.requests if r[0] == 'POST']) == 1
 
 
+@pytest.mark.parametrize(('stream', 'error'), [(False, 'json_parse_failed'), (True, 'http_sse_invalid')])
+def test_gateway_login_page_fails_inference_without_retry(
+    endpoint: Endpoint, tmp_path: Path, stream: bool, error: str,
+) -> None:
+    path = '/private-tunnel/v1/responses'
+    endpoint.routes[path] = (200, 'text/html', b'<html>Sign in: secret-provider-error</html>')
+    settings = config(tmp_path / 'c', endpoint.base + '/v1/responses', stream)
+
+    code, report = check(settings, '--infer')
+
+    assert code == 1
+    assert report['endpoint']['http_status'] == 200
+    assert report['inference']['status'] == 'failed'
+    assert report['inference']['error'] == error
+    assert report['inference']['terminal_status'] is None
+    assert [(url, json.loads(body)['stream']) for method, url, _, body in endpoint.requests
+            if method == 'POST'] == [(path, stream)]
+
+
 @pytest.mark.parametrize('failure', ['dns', 'connection_refused', 'tls'])
 def test_network_failure(tmp_path: Path, endpoint: Endpoint, failure: str) -> None:
     if failure == 'dns':

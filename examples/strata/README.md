@@ -9,6 +9,8 @@
 | SSH 先で直接起動 | `http://127.0.0.1:18080/v1/responses` | [ssh.toml](ssh.toml) |
 | SSH 先の Docker | `http://127.0.0.1:18080/v1/responses` | [ssh-docker.toml](ssh-docker.toml) |
 
+Google Colab は外部クライアントからの利用条件を確認する段階で実機検証を停止した。[Colab の成立条件と検証記録](colab.md)
+
 `model.url` は `/v1/responses` まで含める。HTTP(S) ゲートウェイを使う場合も、Bearer ヘッダー、POST 本文、JSON/SSE が同じ経路を通ることが前提になる。追加のゲートウェイ認証が必要な経路は個別に検証する。`runtime.network = "disabled"` は Gear の Docker shell の設定で、モデル HTTP には適用されない。
 
 ## 推論ホストを用意する
