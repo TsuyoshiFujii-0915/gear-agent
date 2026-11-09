@@ -49,6 +49,8 @@ uv run gear init --scope user
 
 ## 設定
 
+Strata の Qwen モデルを使う場合は、ローカル・Docker・SSH の構成別に接続先と検証手順を選べます。[Strata の導入と疎通確認](examples/strata/README.md)
+
 設定ファイルは、カレントディレクトリから親ディレクトリへ向かって
 プロジェクトスコープの `.gear/config.toml` を探索し、最初に見つかったものを読み込みます。
 見つからない場合はユーザースコープの `~/.gear/config.toml` を読み込みます。
