@@ -9,7 +9,8 @@ from gear_agent.model.events import (
     ModelProgressEventSink,
     SilentModelProgressEventSink,
 )
-from gear_agent.model.responses import validate_response_completion
+from gear_agent.model.responses import ReceivedResponse, validate_response_completion
+from gear_agent.model.statistics import json_statistics
 from gear_agent.model.streaming import ResponsesStreamAssembler
 from gear_agent.model.transport import HttpTransport
 
@@ -80,7 +81,7 @@ class ModelClient:
             Parsed response object.
         """
 
-        return self._create_response(
+        return self.create_response_with_statistics(
             config,
             input_value,
             tools,
@@ -88,7 +89,7 @@ class ModelClient:
             timeout_seconds,
             stream_idle_timeout_seconds,
             self._progress_sink,
-        )
+        ).response
 
     def create_response_with_progress(
         self,
@@ -116,7 +117,7 @@ class ModelClient:
             Parsed response object.
         """
 
-        return self._create_response(
+        return self.create_response_with_statistics(
             config,
             input_value,
             tools,
@@ -124,9 +125,9 @@ class ModelClient:
             timeout_seconds,
             stream_idle_timeout_seconds,
             progress_sink,
-        )
+        ).response
 
-    def _create_response(
+    def create_response_with_statistics(
         self,
         config: ModelConfig,
         input_value: object,
@@ -135,7 +136,8 @@ class ModelClient:
         timeout_seconds: float,
         stream_idle_timeout_seconds: float | None,
         progress_sink: ModelProgressEventSink,
-    ) -> dict[str, Any]:
+    ) -> ReceivedResponse:
+        """Receives the canonical response and request-local observations together."""
         try:
             return self._send_response(
                 config, input_value, tools, instructions, timeout_seconds,
@@ -162,7 +164,7 @@ class ModelClient:
         timeout_seconds: float,
         stream_idle_timeout_seconds: float | None,
         progress_sink: ModelProgressEventSink,
-    ) -> dict[str, Any]:
+    ) -> ReceivedResponse:
         headers = {"Content-Type": "application/json"}
         if config.api_key is not None:
             headers["Authorization"] = f"Bearer {config.api_key}"
@@ -187,8 +189,9 @@ class ModelClient:
                 payload,
                 timeout_seconds,
             )
-            validate_response_completion(response, 'model_client')
-            return response
+            statistics = json_statistics(response)
+            validate_response_completion(response, 'model_client', statistics)
+            return ReceivedResponse(response, statistics)
         if stream_idle_timeout_seconds is None:
             raise gear_error(
                 "stream_idle_timeout_missing",
@@ -227,4 +230,4 @@ class ModelClient:
                     {"sse_event": sse_event.event},
                 )
             assembler.consume(event)
-        return assembler.finish()
+        return assembler.finish_with_statistics()

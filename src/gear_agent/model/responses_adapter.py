@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from gear_agent.agent.history import build_model_input
+from gear_agent.model.statistics import ResponseStatistics
 from gear_agent.model.types import FunctionCall, ModelHistory, ModelUsage
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import gear_error
@@ -25,6 +26,7 @@ class ResponsesModelResponse:
 
     response: dict[str, Any]
     policy: ReasoningReplayPolicy
+    statistics: ResponseStatistics
 
     @property
     def usage(self) -> ModelUsage:
@@ -151,12 +153,12 @@ class ResponsesModelAdapter:
         Returns:
             Completed response with semantic accessors.
         """
-        response = self._client.create_response_with_progress(
+        received = self._client.create_response_with_statistics(
             self._config, input_value, tools, instructions,
             timeout_seconds, stream_idle_timeout_seconds,
             progress_sink,
         )
-        return ResponsesModelResponse(response, self.replay_policy)
+        return ResponsesModelResponse(received.response, self.replay_policy, received.statistics)
 
     def tool_result_item(self, call_id: str, result: dict[str, object]) -> object:
         """Encodes a tool result.
