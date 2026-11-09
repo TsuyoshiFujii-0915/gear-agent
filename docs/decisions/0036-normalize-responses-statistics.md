@@ -4,7 +4,8 @@ Normalize request statistics at the Responses terminal boundary
 
 # Status
 
-accepted
+Accepted. The Strata decode accounting portion is superseded by
+[ADR 0037](0037-strata-decode-accounting.md).
 
 # Context
 

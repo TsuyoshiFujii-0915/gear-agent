@@ -109,13 +109,16 @@ def test_strata_timing_locations(location: str) -> None:
     stats = result.statistics
     assert result.persisted_payload == body
     assert (stats.prefill_rate.value, stats.decode_rate.value) == (81, 12)
-    assert (stats.prefill_tokens.value, stats.decode_tokens.value, stats.output_tokens.value) == (20, 7, 8)
+    assert (stats.prefill_tokens.value, stats.reported_predicted_tokens.value, stats.output_tokens.value) == (20, 7, 8)
     assert (stats.prefill_seconds.value, stats.decode_seconds.value) == (0.25, 0.5)
     source = stats.prefill_seconds.sources[0]
     assert (source.path, source.value, source.unit) == (prefix + '.prompt_ms', 250, 'ms')
     assert source.schema == 'strata_qwen_timings'
     assert (stats.prefill_seconds.unit, stats.decode_rate.unit) == ('s', 'tokens/s')
     assert stats.decode_rate.origin == 'server_reported'
+    count = stats.reported_predicted_tokens
+    assert count.origin == 'server_reported'
+    assert (count.sources[0].path, count.sources[0].value) == (prefix + '.predicted_n', 7)
     assert 'SECRET' not in json.dumps(asdict(stats))
 
 
@@ -129,17 +132,33 @@ def test_sse_prefers_whole_outer_timings_and_ignores_earlier_snapshots() -> None
     assert stats.input_tokens.value is None
 
 
-def test_only_engine_counts_and_durations_can_supply_missing_throughput() -> None:
-    stats = receive({'usage': {'input_tokens': 999, 'output_tokens': 999},
-                     'timings': {'prompt_n': 10, 'prompt_ms': 500, 'predicted_n': 6, 'predicted_ms': 2000}},
-                    []).statistics
-    assert (stats.prefill_rate.value, stats.decode_rate.value) == (20, 3)
-    assert stats.decode_rate.origin == 'derived'
-    assert [f.value for f in stats.decode_rate.sources] == [6, 2000]
-    assert stats.decode_rate.formula == 'tokens / (ms / 1000)'
-    stats = receive({'usage': {'input_tokens': 999, 'output_tokens': 999},
-                     'timings': {'prompt_ms': 500, 'predicted_ms': 500}}, []).statistics
-    assert stats.prefill_rate.value is stats.decode_rate.value is None
+def test_prefill_rate_uses_newly_processed_tokens_and_server_duration() -> None:
+    stats = receive({'usage': {'input_tokens': 999},
+                     'timings': {'prompt_n': 10, 'prompt_ms': 500}}, []).statistics
+    assert stats.prefill_rate.value == 20
+    assert stats.prefill_rate.origin == 'derived'
+    assert [f.value for f in stats.prefill_rate.sources] == [10, 500]
+    assert stats.prefill_rate.formula == 'tokens / (ms / 1000)'
+    stats = receive({'usage': {'input_tokens': 999}, 'timings': {'prompt_ms': 500}}, []).statistics
+    assert stats.prefill_rate.value is None
+
+
+@pytest.mark.parametrize('rate_field', [{}, {'predicted_per_second': None}])
+def test_unreported_decode_rate_stays_missing_with_count_and_duration(rate_field: dict[str, None]) -> None:
+    timings = {'predicted_n': 120, 'predicted_ms': 1000, **rate_field}
+    stats = receive({'usage': {'output_tokens': 125}, 'timings': timings}, []).statistics
+    rate = stats.decode_rate
+    assert (rate.value, rate.availability, rate.reason) == (None, 'missing', 'not_reported')
+    assert rate.sources[0].path == 'timings.predicted_per_second'
+    assert (stats.reported_predicted_tokens.value, stats.decode_seconds.value) == (120, 1)
+
+
+@pytest.mark.parametrize(('count', 'milliseconds'), [(120, 1000), (0, 1000), (1, 0)])
+def test_decode_rate_preserves_the_independent_server_measurement(count: int, milliseconds: int) -> None:
+    stats = receive({'timings': {'predicted_n': count, 'predicted_ms': milliseconds,
+                                 'predicted_per_second': 100}}, []).statistics
+    assert (stats.decode_rate.value, stats.decode_rate.origin) == (100, 'server_reported')
+    assert stats.reported_predicted_tokens.value == count
 
 
 @pytest.mark.parametrize('bad', [True, -1, 'SECRET', float('nan'), float('inf'), [], {}])

@@ -48,7 +48,7 @@ class ResponseStatistics:
     cache_write_tokens: Metric
     cache_hit_ratio: Metric
     prefill_tokens: Metric
-    decode_tokens: Metric
+    reported_predicted_tokens: Metric
     prefill_seconds: Metric
     decode_seconds: Metric
     prefill_rate: Metric
@@ -135,7 +135,7 @@ def _seconds(milliseconds: Metric) -> Metric:
     return replace(milliseconds, value=seconds, unit='s', formula='ms / 1000')
 
 
-def _rate(reported: Metric, tokens: Metric, seconds: Metric) -> Metric:
+def _prefill_rate(reported: Metric, tokens: Metric, seconds: Metric) -> Metric:
     sources = tokens.sources + seconds.sources
     if tokens.value == 0:
         return _unavailable('tokens/s', 'not_applicable', 'zero_tokens', tokens.sources)
@@ -154,20 +154,6 @@ def _rate(reported: Metric, tokens: Metric, seconds: Metric) -> Metric:
     return Metric(rate, 'tokens/s', 'available', None, 'derived', 'tokens / (ms / 1000)', sources)
 
 
-@dataclass(frozen=True)
-class _Phase:
-    tokens: Metric
-    seconds: Metric
-    rate: Metric
-
-
-def _strata_phase(fields: _Fields, phase: Literal['prompt', 'predicted']) -> _Phase:
-    tokens = fields.read(f'{phase}_n', 'tokens')
-    seconds = _seconds(fields.read(f'{phase}_ms', 'ms'))
-    rate = _rate(fields.read(f'{phase}_per_second', 'tokens/s'), tokens, seconds)
-    return _Phase(tokens, seconds, rate)
-
-
 def _normalize(usage: _Fields, timings: _Fields) -> ResponseStatistics:
     inputs = usage.read('input_tokens', 'tokens')
     outputs = usage.read('output_tokens', 'tokens')
@@ -177,16 +163,19 @@ def _normalize(usage: _Fields, timings: _Fields) -> ResponseStatistics:
                         outputs, 'exceeds_output_tokens')
     writes = _subset(usage.read('input_tokens_details.cache_write_tokens', 'tokens'),
                      inputs, 'exceeds_input_tokens')
-    prefill = _strata_phase(timings, 'prompt')
-    decode = _strata_phase(timings, 'predicted')
+    prefill_tokens = timings.read('prompt_n', 'tokens')
+    prefill_seconds = _seconds(timings.read('prompt_ms', 'ms'))
     return ResponseStatistics(
         input_tokens=inputs, output_tokens=outputs,
         total_tokens=_total(usage.read('total_tokens', 'tokens'), inputs, outputs),
         reasoning_tokens=reasoning, cached_tokens=cached, cache_write_tokens=writes,
         cache_hit_ratio=_cache_ratio(cached, inputs),
-        prefill_tokens=prefill.tokens, decode_tokens=decode.tokens,
-        prefill_seconds=prefill.seconds, decode_seconds=decode.seconds,
-        prefill_rate=prefill.rate, decode_rate=decode.rate,
+        prefill_tokens=prefill_tokens,
+        prefill_seconds=prefill_seconds,
+        prefill_rate=_prefill_rate(timings.read('prompt_per_second', 'tokens/s'), prefill_tokens, prefill_seconds),
+        reported_predicted_tokens=timings.read('predicted_n', 'tokens'),
+        decode_seconds=_seconds(timings.read('predicted_ms', 'ms')),
+        decode_rate=timings.read('predicted_per_second', 'tokens/s'),
     )
 
 
