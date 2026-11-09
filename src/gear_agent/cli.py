@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser, ArgumentTypeError, Namespace
+from dataclasses import replace
 from typing import Mapping
 from pathlib import Path
 from uuid import uuid4
@@ -15,6 +16,7 @@ from gear_agent.config import (
     discover_config_path,
     initialize_config,
     load_config,
+    load_model_check_config,
 )
 from gear_agent.errors import GearError, safe_error_payload
 from gear_agent.headless import (
@@ -47,6 +49,8 @@ def run_cli(argv: list[str], environment: Mapping[str, str]) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "model":
+        return _run_model_check(args, environment)
     if args.command == "run":
         return _run_headless(args, environment)
     try:
@@ -113,7 +117,57 @@ def _build_parser() -> ArgumentParser:
         "--run-dir", type=Path,
         help="Exact new artifact directory; defaults to <workspace>/.gear/runs/<run-id>.",
     )
+    model_parser = subparsers.add_parser("model", help="Diagnose a model connection.")
+    check = model_parser.add_subparsers(required=True).add_parser("check", help="Check the configured endpoint.")
+    check.add_argument("--profile", choices=("generic", "strata", "maya"), default="generic",
+                       help="Read vendor metadata only for an explicit Strata or Maya profile.")
+    check.add_argument("--infer", action="store_true",
+                       help="Send one small Responses request. It consumes API usage/compute and may lazy-load a model.")
+    check.add_argument("--deadline-seconds", type=_positive_seconds, default=60,
+                       help="Wall-clock limit for all diagnostic requests, including inference (default: 60).")
+    check.add_argument("--json", action="store_true", help="Print the versioned JSON report.")
     return parser
+
+
+def _positive_seconds(value: str) -> int:
+    seconds = int(value)
+    if not 1 <= seconds <= 86400:
+        raise ArgumentTypeError("Expected 1 to 86400 seconds.")
+    return seconds
+
+
+def _config_path(args: Namespace, environment: Mapping[str, str]) -> Path:
+    if args.config is not None:
+        return args.config
+    return discover_config_path(Path.cwd(), _home_dir(environment))
+
+
+def _run_model_check(args: Namespace, environment: Mapping[str, str]) -> int:
+    from gear_agent.model.check import format_report, run_model_check
+
+    try:
+        config = load_model_check_config(_config_path(args, environment), environment)
+        if args.model_timeout_seconds is not None:
+            if args.model_timeout_seconds <= 0:
+                raise GearError("invalid_timeout", "Expected a positive model timeout.", "model_check", True, {})
+            config = replace(config, timeout_seconds=args.model_timeout_seconds)
+        code, report = run_model_check(config, args.profile, args.infer, args.deadline_seconds, environment)
+    except (GearError, UnicodeError, ValueError) as exc:
+        error = {"type": "config_value_invalid"}
+        if isinstance(exc, GearError):
+            error = {"type": exc.error_type, "origin": exc.origin}
+            # Only schema-defined names and fixed validation messages may be printed.
+            key = exc.details.get("key")
+            if key in ("url", "model", "api_key_env", "reasoning_replay", "stream", "reasoning_effort",
+                       "max_output_tokens", "model_timeout_seconds", "model_stream_idle_timeout_seconds",
+                       "auto_compaction", "context_window_tokens", "reserved_tokens", "max_input_tokens"):
+                error["field"] = f"{exc.details['table']}.{key}"
+                error["message"] = exc.message
+            elif exc.error_type == "config_secret_missing":
+                error["field"] = "model.api_key_env"
+        code, report = 1, {"schema_version": 1, "error": error}
+    print(json.dumps(report) if args.json else format_report(report))
+    return code
 
 
 def _prepare_runtime(
@@ -121,10 +175,7 @@ def _prepare_runtime(
     observer: RunObserver | None = None,
 ) -> AgentRuntime:
     """Composes services; interactive callers omit the optional run observer."""
-    config_path = args.config
-    if config_path is None:
-        config_path = discover_config_path(Path.cwd(), _home_dir(environment))
-    config = load_config(config_path, environment)
+    config = load_config(_config_path(args, environment), environment)
     runtime = _runtime_from_args(config.runtime, args)
     return build_agent_runtime(config, runtime, event_sink, observer)
 

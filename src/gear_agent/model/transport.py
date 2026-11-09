@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Iterator
 import json
@@ -72,6 +73,21 @@ class SseEvent:
 class HttpxHttpTransport(HttpTransport):
     """HTTPX transport supporting JSON and incremental SSE responses."""
 
+    def __init__(self, on_status: Callable[[int], None] | None = None) -> None:
+        """Optionally report HTTP status as soon as headers arrive for diagnostics."""
+        self._on_status = on_status
+
+    def _client(self, timeout: httpx.Timeout) -> httpx.Client:
+        client = httpx.Client(timeout=timeout)
+        if self._on_status is not None:
+            on_status = self._on_status
+
+            def report_status(response: httpx.Response) -> None:
+                on_status(response.status_code)
+
+            client.event_hooks["response"].append(report_status)
+        return client
+
     def post_json(
         self,
         url: str,
@@ -80,7 +96,7 @@ class HttpxHttpTransport(HttpTransport):
         timeout_seconds: float,
     ) -> dict[str, Any]:
         try:
-            with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
+            with self._client(httpx.Timeout(timeout_seconds)) as client:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -152,7 +168,7 @@ class HttpxHttpTransport(HttpTransport):
         )
         try:
             status_error: httpx.HTTPStatusError | None = None
-            with httpx.Client(timeout=timeout) as client:
+            with self._client(timeout) as client:
                 with connect_sse(
                     client,
                     "POST",

@@ -715,6 +715,34 @@ uv run gear --max-iterations 4 --model-timeout-seconds 30
 uv run gear --session-dir ../sessions resume --latest
 ```
 
+### モデル接続を診断する
+
+`gear model check` は通常起動と同じ順序で設定を探索します。モデル接続・タイムアウト・コンテキスト予算を読み取り、Docker、ツール、Web/Jev の API キー、セッションを使わずに実行できます。
+
+```bash
+uv run gear model check
+uv run gear --config strata.toml model check --profile strata
+uv run gear --config maya.toml model check --profile maya --infer --deadline-seconds 90 --json
+```
+
+既定では設定の完全な `model.url` に HEAD を送ります。405 / 501 は HTTP 応答を受信できたことを示し、POST の認証や Responses 互換性は未検証です。`--profile strata` または `--profile maya` では、さらに同じ origin・パス prefix の `/health`、`/v1/models`、`/props` に GET を送ります。例えば `/strata/v1/responses` の health は `/strata/health` です。URL にクエリがある場合や末尾が `/v1/responses` でない場合は metadata の取得を省略します。HTTP リダイレクトは追跡せず、HTTPS では証明書を検証します。
+
+`--infer` は HEAD を固定の短い入力による Responses POST 1 回に置き換えます。**API 使用量・計算資源を消費し、サーバーの設定によってはモデルがロードされます。** 設定された JSON / SSE 経路と reasoning effort を使い、出力上限をこの呼び出しに限って最大 32 トークンにします。設定上限や自動圧縮の予約が小さければその範囲に収めます。プロジェクトのファイル・履歴・ツールは送信しません。上限到達による `response_incomplete` もそのまま返し、再試行は行いません。
+
+`runtime.model_timeout_seconds` は接続・書き込み・プール待機（非ストリームでは読み取りも）、`runtime.model_stream_idle_timeout_seconds` は SSE の受信バイト間の待機に適用されます。prefill 中の heartbeat は idle を解除できますが、完了の証拠にはなりません。`--deadline-seconds` は診断全体のネットワーク待機を制限します（既定 60 秒）。ツール往復・長文・resume はこの短い推論の検証対象外です。
+
+`--json` は標準出力に `schema_version: 1` の JSON オブジェクトを 1 件返します。
+
+| フィールド | 読み方 |
+| --- | --- |
+| `settings` | 要求モデル、設定上限、予約、生成設定、タイムアウト（秒）。 |
+| `endpoint` / `metadata` | リクエストごとの接続・HTTP ステータス・認証結果。`request_allowed` はそのリクエストの 2xx、`denied` は 401 / 403。metadata の 404 / 405 / 501 は `unavailable`。 |
+| `server` | サーバー報告のモデル ID・ロード状態・実行時 context・ツール対応の申告。文字列の別名はあり得ます。未報告の数値・フラグは `null`、ロード状態は `unknown`。 |
+| `inference` | `not_run`、`succeeded`、`failed`。実行時の形式・出力上限、取得できた終了状態・usage・経過秒数、失敗種別を返します。互換 JSON 応答で終了状態が省略された場合は `terminal_status: null` です。 |
+| `warnings` / `error` | モデル名や context の差などの注意、または診断を実行できなかった原因。設定エラー時はバージョンと `error` のみ返します。 |
+
+終了コードは **0** が実施したチェックの成功（注意・任意 metadata 未提供を含む）、**1** が診断失敗または設定エラー、**2** が CLI 引数エラーです。metadata だけの成功は推論可能性を保証しません。レポートには URL、Bearer、provider のエラー本文、モデルの応答本文、テンプレートやモデルファイルパスを含めません。
+
 ### 非対話で1タスクを実行する
 
 `run` は新規セッションで1回のユーザーターンを実行します。モデルのツール呼び出しは、

@@ -1,0 +1,5 @@
+{
+  "health": {"status": "ok", "max_context": 4096, "model": "fixture-model", "unloaded": false},
+  "v1/models": {"object": "list", "data": [{"id": "fixture-model", "status": {"value": "loaded"}, "meta": {"n_ctx": 4096}, "context_length": 4096}]},
+  "props": {"default_generation_settings": {"n_ctx": 4096}, "model_alias": "fixture-model", "chat_template": "private/template", "model_path": "/private/model.gguf", "is_sleeping": false}
+}
