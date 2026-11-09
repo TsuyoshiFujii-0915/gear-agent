@@ -53,12 +53,15 @@ def _http_result(status: str, code: int | None) -> dict[str, Any]:
     return {'status': status, 'http_status': code, 'authentication': auth, 'connection': connection}
 
 
-def _read(client: httpx.Client, url: str, name: str) -> tuple[dict[str, Any], dict[str, object] | None]:
+def _read(pipe: Connection, client: httpx.Client, url: str,
+          name: str) -> tuple[dict[str, Any], dict[str, object] | None]:
+    pipe.send(('start', name))
     method = 'HEAD' if name == 'endpoint' else 'GET'
     code = None
     try:
         with client.stream(method, url) as response:
             code = response.status_code
+            pipe.send((name, _http_result('headers_received', code)))
             if name == 'endpoint' and code in (405, 501):
                 return _http_result('method_unsupported', code), None
             if name != 'endpoint' and code in (404, 405, 501):
@@ -132,13 +135,11 @@ def _worker(pipe: Connection, config: ModelCheckConfig, profile: str, cap: int |
         documents: dict[str, dict[str, object]] = {}
         with httpx.Client(headers=headers, timeout=config.timeout_seconds, follow_redirects=False) as client:
             if cap is None:
-                pipe.send(('start', 'endpoint'))
-                endpoint, _ = _read(client, model.url, 'endpoint')
+                endpoint, _ = _read(pipe, client, model.url, 'endpoint')
                 pipe.send(('endpoint', endpoint))
             if profile != 'generic' and prefix is not None:
                 for name, path in [('health', '/health'), ('models', '/v1/models'), ('props', '/props')]:
-                    pipe.send(('start', name))
-                    observation, document = _read(client, prefix + path, name)
+                    observation, document = _read(pipe, client, prefix + path, name)
                     if document is not None:
                         documents[name] = document
                         try:
@@ -245,6 +246,8 @@ def _collect(report: dict[str, Any], config: ModelCheckConfig, profile: str, cap
                 break
             if kind == 'start':
                 active, started = value, monotonic()
+                if active in ('health', 'models', 'props'):
+                    report['metadata'][active] = _http_result('started', None)
             elif kind in ('health', 'models', 'props'):
                 report['metadata'][kind] = value
             elif kind == 'inference':
@@ -253,14 +256,13 @@ def _collect(report: dict[str, Any], config: ModelCheckConfig, profile: str, cap
                 report[kind] = value
     except (TimeoutError, EOFError) as exc:
         reason = 'deadline_exceeded' if isinstance(exc, TimeoutError) else 'worker_failed'
-        failure = _http_result(reason, None)
         if active == 'inference':
             report['inference'].update(status='failed', error=reason, elapsed_seconds=monotonic() - started,
                                        authentication=report['endpoint']['authentication'])
         elif active == 'endpoint':
-            report['endpoint'] = failure
+            report['endpoint']['status'] = reason
         else:
-            report['metadata'][active] = failure
+            report['metadata'][active]['status'] = reason
         return False
     finally:
         reader.close()

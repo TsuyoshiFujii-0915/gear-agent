@@ -241,3 +241,17 @@ def test_budget_error_is_reported_without_network(endpoint: Endpoint, tmp_path: 
     code, report = check(path, '--infer')
     assert code == 1 and 'reserved_tokens' in json.dumps(report['error'])
     assert endpoint.requests == []
+
+
+def test_metadata_body_deadline_preserves_received_headers(endpoint: Endpoint, tmp_path: Path) -> None:
+    endpoint.routes['/private-tunnel/health'] = (200, 'application/json', b'idle')
+    code, report = check(config(tmp_path / 'c', endpoint.base + '/v1/responses', False),
+                         '--profile', 'strata', '--deadline-seconds', '1')
+    assert code == 1
+    assert report['metadata']['health'] == {
+        'status': 'deadline_exceeded', 'http_status': 200,
+        'connection': 'reached', 'authentication': 'request_allowed',
+    }
+    assert report['endpoint']['http_status'] == 405
+    assert report['inference']['status'] == 'not_run'
+    assert [r[1] for r in endpoint.requests] == ['/private-tunnel/v1/responses', '/private-tunnel/health']
