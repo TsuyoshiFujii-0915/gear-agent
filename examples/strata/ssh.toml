@@ -1,0 +1,32 @@
+[model]
+url = "http://127.0.0.1:18080/v1/responses"
+model = "replace-with-loaded-model-id"
+api_key_env = "STRATA_API_KEY"
+reasoning_replay = "none"
+reasoning_effort = "low"
+max_output_tokens = 512
+stream = true
+
+[tool]
+shell_tool = false
+file_read = true
+file_write = false
+apply_patch = false
+glob = false
+grep = false
+web_search = false
+web_fetch = false
+
+[runtime]
+workdir = "."
+session_dir = ".gear/sessions"
+network = "disabled"
+max_iterations = 3
+model_timeout_seconds = 120
+model_stream_idle_timeout_seconds = 60
+
+[context_budget]
+# Example only. Set the window to the actual loaded capacity before inference.
+auto_compaction = true
+context_window_tokens = 32768
+reserved_tokens = 2048
