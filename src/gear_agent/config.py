@@ -305,32 +305,8 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
         GearError: If the file cannot be read or required values are invalid.
     """
 
-    try:
-        raw_data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise gear_error(
-            "config_read_failed",
-            f"Failed to read config file: {path}",
-            "config",
-            True,
-            {"path": str(path), "reason": str(exc)},
-        ) from exc
-    except tomllib.TOMLDecodeError as exc:
-        raise gear_error(
-            "config_parse_failed",
-            f"Failed to parse config file: {path}",
-            "config",
-            True,
-            {"path": str(path), "reason": str(exc)},
-        ) from exc
-
-    model_table = _required_table(raw_data, "model")
-    url = _required_string(model_table, "url", "model")
-    model = _required_string(model_table, "model", "model")
-    api_key_env = _required_string(model_table, "api_key_env", "model")
-    api_key = _resolve_api_key(api_key_env, environment)
-    reasoning_replay = _load_reasoning_replay(model_table)
-    stream = _load_model_stream(model_table)
+    raw_data = _read_config(path)
+    model = _load_model(raw_data, environment)
     runtime_table = _required_table(raw_data, "runtime")
     runtime = RuntimeConfig(
         workdir=Path(_required_string(runtime_table, "workdir", "runtime")),
@@ -344,7 +320,7 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
         ),
         model_stream_idle_timeout_seconds=_load_model_stream_idle_timeout(
             runtime_table,
-            stream,
+            model.stream,
         ),
     )
     tool_table = _required_table(raw_data, "tool")
@@ -375,21 +351,72 @@ def load_config(path: Path, environment: Mapping[str, str]) -> AppConfig:
     web_search = _load_web_search_config(raw_data, tool.web_search, environment)
     web_fetch = _load_web_fetch_config(raw_data, tool.web_fetch, environment)
     return AppConfig(
-        ModelConfig(
-            url=url,
-            model=model,
-            api_key=api_key,
-            reasoning_replay=reasoning_replay,
-            stream=stream,
-            reasoning_effort=_validate_reasoning_effort(model_table.get('reasoning_effort')),
-            max_output_tokens=_validate_max_output_tokens(model_table.get('max_output_tokens')),
-        ),
+        model,
         runtime,
         tool,
         web_search,
         web_fetch,
         _load_context_budget(raw_data),
         load_compaction_config(raw_data, environment),
+    )
+
+
+@dataclass(frozen=True)
+class ModelCheckConfig:
+    """Connection, timeouts and budget needed for a standalone model check."""
+
+    model: ModelConfig
+    timeout_seconds: int
+    idle_timeout_seconds: int | None
+    budget: ContextBudgetConfig
+
+
+def load_model_check_config(path: Path, environment: Mapping[str, str]) -> ModelCheckConfig:
+    """Reads the model configuration without resolving tool or compaction services."""
+    raw_data = _read_config(path)
+    model = _load_model(raw_data, environment)
+    budget = _load_context_budget(raw_data)
+    validate_output_reserve(budget, model.max_output_tokens)
+    runtime = _required_table(raw_data, "runtime")
+    return ModelCheckConfig(
+        model, _required_positive_int(runtime, "model_timeout_seconds", "runtime"),
+        _load_model_stream_idle_timeout(runtime, model.stream), budget,
+    )
+
+
+def _read_config(path: Path) -> dict[str, object]:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise gear_error(
+            "config_read_failed",
+            f"Failed to read config file: {path}",
+            "config",
+            True,
+            {"path": str(path), "reason": str(exc)},
+        ) from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise gear_error(
+            "config_parse_failed",
+            f"Failed to parse config file: {path}",
+            "config",
+            True,
+            {"path": str(path), "reason": str(exc)},
+        ) from exc
+
+
+def _load_model(raw_data: dict[str, object], environment: Mapping[str, str]) -> ModelConfig:
+    model_table = _required_table(raw_data, "model")
+    url = _required_string(model_table, "url", "model")
+    model = _required_string(model_table, "model", "model")
+    api_key_env = _required_string(model_table, "api_key_env", "model")
+    api_key = _resolve_api_key(api_key_env, environment)
+    reasoning_replay = _load_reasoning_replay(model_table)
+    stream = _load_model_stream(model_table)
+    return ModelConfig(
+        url=url, model=model, api_key=api_key, reasoning_replay=reasoning_replay, stream=stream,
+        reasoning_effort=_validate_reasoning_effort(model_table.get('reasoning_effort')),
+        max_output_tokens=_validate_max_output_tokens(model_table.get('max_output_tokens')),
     )
 
 
