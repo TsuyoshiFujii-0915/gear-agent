@@ -1,13 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 import json
 
 from gear_agent.errors import GearError, gear_error
 from gear_agent.model.types import FunctionCall
+from gear_agent.model.statistics import ResponseStatistics
 
 
-def validate_response_completion(response: dict[str, Any], origin: str) -> None:
+@dataclass(frozen=True)
+class ReceivedResponse:
+    """Canonical response and its independently normalized wire statistics."""
+
+    response: dict[str, Any]
+    statistics: ResponseStatistics
+
+
+@dataclass(frozen=True)
+class ResponseFailure(GearError):
+    """Terminal failure with safe observations when a response snapshot exists."""
+
+    statistics: ResponseStatistics | None
+
+
+def validate_response_completion(
+    response: dict[str, Any], origin: str, statistics: ResponseStatistics,
+) -> None:
     """Rejects unsuccessful Responses objects before their output can be used.
 
     Missing status is deliberately accepted for legacy JSON-compatible servers;
@@ -17,15 +36,16 @@ def validate_response_completion(response: dict[str, Any], origin: str) -> None:
     Args:
         response: Parsed or assembled response, not an intermediate snapshot.
         origin: Model component reporting the failure.
+        statistics: Safe observations from the received terminal snapshot.
 
     Raises:
         GearError: If status or error metadata prevents successful completion.
     """
     status = response.get('status')
     if status == 'incomplete':
-        raise response_failure_error('response_incomplete', response, origin)
+        raise response_failure_error('response_incomplete', response, origin, statistics)
     if status == 'failed':
-        raise response_failure_error('response_failed', response, origin)
+        raise response_failure_error('response_failed', response, origin, statistics)
     if 'status' in response and status != 'completed':
         details: dict[str, object] = {'reason': 'invalid_status'}
         if isinstance(status, str) and status in ('cancelled', 'queued', 'in_progress'):
@@ -35,7 +55,7 @@ def validate_response_completion(response: dict[str, Any], origin: str) -> None:
             origin, True, details,
         )
     if response.get('error') is not None:
-        raise response_failure_error('response_failed', response, origin)
+        raise response_failure_error('response_failed', response, origin, statistics)
     if response.get('incomplete_details') is not None:
         raise gear_error(
             'response_status_invalid', 'Model response has conflicting incomplete details.',
@@ -45,14 +65,15 @@ def validate_response_completion(response: dict[str, Any], origin: str) -> None:
 
 def response_failure_error(
     error_type: Literal['response_failed', 'response_incomplete', 'response_stream_error'],
-    response: dict[str, Any], origin: str,
-) -> GearError:
+    response: dict[str, Any], origin: str, statistics: ResponseStatistics | None,
+) -> ResponseFailure:
     """Builds a failure diagnostic without copying arbitrary provider content.
 
     Args:
         error_type: Category established by response status or SSE event type.
         response: Provider object from which only allowlisted values are read.
         origin: Model component reporting the failure.
+        statistics: Safe observations from the received terminal snapshot.
 
     Returns:
         Structured error containing a fixed message and safe code/reason values.
@@ -76,7 +97,7 @@ def response_failure_error(
         reason = incomplete.get('reason')
         if isinstance(reason, str) and reason in ('max_output_tokens', 'content_filter'):
             details['reason'] = reason
-    return gear_error(error_type, messages[error_type], origin, True, details)
+    return ResponseFailure(error_type, messages[error_type], origin, True, details, statistics)
 
 
 def extract_output_text(response: dict[str, Any]) -> str:

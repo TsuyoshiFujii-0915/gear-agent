@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from gear_agent.model.events import ModelProgressEventSink
 from gear_agent.model.replay import ReasoningReplayPolicy, ReplayedOutput
+from gear_agent.model.statistics import ResponseStatistics
 from gear_agent.model.types import FunctionCall, ModelHistory, ModelUsage
 
 
@@ -25,6 +26,11 @@ class ModelCapabilities:
 
 class ModelResponse(Protocol):
     """Completed result with canonical persistence and semantic accessors."""
+
+    @property
+    def statistics(self) -> ResponseStatistics:
+        """Returns normalized observations for this request."""
+        ...
 
     @property
     def usage(self) -> ModelUsage:

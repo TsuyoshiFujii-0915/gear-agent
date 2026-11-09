@@ -13,7 +13,8 @@ from gear_agent.model.events import (
     ModelReasoningTextDelta,
     ModelTextDelta,
 )
-from gear_agent.model.responses import response_failure_error, validate_response_completion
+from gear_agent.model.responses import ReceivedResponse, response_failure_error, validate_response_completion
+from gear_agent.model.statistics import terminal_statistics
 
 
 @dataclass
@@ -35,7 +36,7 @@ class ResponsesStreamAssembler:
         self._created_response: dict[str, Any] | None = None
         self._item_states: dict[int, _ItemState] = {}
         self._completed_items: dict[int, dict[str, Any]] = {}
-        self._completed_response: dict[str, Any] | None = None
+        self._completed_response: ReceivedResponse | None = None
         self._terminal_received = False
 
     def consume(self, event: dict[str, Any]) -> None:
@@ -99,6 +100,7 @@ class ResponsesStreamAssembler:
                 "response_stream_error",
                 {'error': event},
                 "responses_stream",
+                None,
             )
 
     def finish(self) -> dict[str, Any]:
@@ -111,6 +113,10 @@ class ResponsesStreamAssembler:
             GearError: If EOF occurred before a completed terminal event.
         """
 
+        return self.finish_with_statistics().response
+
+    def finish_with_statistics(self) -> ReceivedResponse:
+        """Returns the completed result and statistics from its terminal event."""
         if self._completed_response is None:
             raise gear_error(
                 "response_stream_terminated",
@@ -225,7 +231,8 @@ class ResponsesStreamAssembler:
         if not isinstance(response, dict):
             raise _event_error("Completed event lacks a response object.", event)
         terminal_response = deepcopy(response)
-        validate_response_completion(terminal_response, 'responses_stream')
+        statistics = terminal_statistics(event, response)
+        validate_response_completion(terminal_response, 'responses_stream', statistics)
         if 'status' not in terminal_response:
             raise _event_error(
                 "Completed event response status is not completed.",
@@ -241,14 +248,10 @@ class ResponsesStreamAssembler:
                         "Completed response output item is not an object.",
                         event,
                     )
-        if isinstance(output, list) and _terminal_output_is_complete(
-            output,
-            self._completed_items,
-            event,
+        assembled = terminal_response
+        if not isinstance(output, list) or not _terminal_output_is_complete(
+            output, self._completed_items, event,
         ):
-            self._completed_response = terminal_response
-        else:
-            assembled = terminal_response
             if self._created_response is not None:
                 assembled = deepcopy(self._created_response)
                 assembled.update(terminal_response)
@@ -256,8 +259,8 @@ class ResponsesStreamAssembler:
                 deepcopy(self._completed_items[index])
                 for index in sorted(self._completed_items)
             ]
-            self._completed_response = assembled
-        validate_response_completion(self._completed_response, 'responses_stream')
+        validate_response_completion(assembled, 'responses_stream', statistics)
+        self._completed_response = ReceivedResponse(assembled, statistics)
         self._terminal_received = True
 
     def _raise_terminal_response_error(
@@ -268,7 +271,7 @@ class ResponsesStreamAssembler:
         response = event.get("response")
         if not isinstance(response, dict):
             raise _event_error("Terminal event lacks a response object.", event)
-        raise response_failure_error(error_type, response, 'responses_stream')
+        raise response_failure_error(error_type, response, 'responses_stream', terminal_statistics(event, response))
 
     def _required_item_state(
         self,
