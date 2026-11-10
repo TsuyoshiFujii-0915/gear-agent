@@ -40,7 +40,7 @@ class JsonlContextStore(ContextStore):
         flags = os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK
         fd = os.open(path, flags, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise OSError('Request log destination must be a single regular file.')

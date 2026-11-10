@@ -818,6 +818,8 @@ TUI と `gear run` は、通常要求・手動要約・自動要約・Jev の要
 `<runtime.session_dir>/<session-id>.requests.ndjson` へ 1 行ずつ追記します。
 各行の `request_id` で、UI の開始・終了通知と headless の成果物を照合できます。
 セッション再開後も同じファイルに追記されます。会話の復元と要約には従来の履歴を使います。
+別プロセスが統計ログをロックしている場合、その要求の追記は行わず、要求 ID 付きの
+`request_log_write_failed` を通知してツール処理や回答の確定を続けます。
 
 `statistics` にはサーバー報告のトークン数、キャッシュ、prefill/decode の計数・時間・速度と、
 各値の単位・取得元・導出式・欠測理由が入ります。`client` は Gear の単調時計による秒数です。
