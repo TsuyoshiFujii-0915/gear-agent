@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from gear_agent.errors import gear_error
+from gear_agent.model.arrival import TimedProgressSink
 from gear_agent.model.events import (
     ModelFunctionCallArgumentsDelta,
     ModelOutputItemCompleted,
@@ -232,6 +233,8 @@ class ResponsesStreamAssembler:
             raise _event_error("Completed event lacks a response object.", event)
         terminal_response = deepcopy(response)
         statistics = terminal_statistics(event, response)
+        if isinstance(self._progress_sink, TimedProgressSink):
+            self._progress_sink.terminal_statistics = statistics
         validate_response_completion(terminal_response, 'responses_stream', statistics)
         if 'status' not in terminal_response:
             raise _event_error(

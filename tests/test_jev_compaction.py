@@ -243,6 +243,8 @@ def test_automatic_failures_are_atomic_with_explicit_fallback(tmp_path: Path, fa
             assert loop.run_turn('s', 'current task', 1, 30).final_text == 'done'
             assert 'RESULT-BODY-' in transport.payloads[0]['input']
             assert sum(x.get('content') == 'current task' for x in transport.payloads[1]['input']) == 1
+    requests = [p for k, p in observer.records if k == 'model_request_finished']
+    assert [r['purpose'] for r in requests] == (['jev_summary_fallback', 'agent'] if fallback == 'summary' else [])
     assert store.load('s')[:len(original)] == original
     assert not any(e['kind'] == 'compaction_selective' for e in store.load('s'))
     metrics = [p for k, p in observer.records if k == 'compaction_strategy'][-1]

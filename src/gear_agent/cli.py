@@ -9,7 +9,6 @@ import json
 import os
 import sys
 
-from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.events import AgentLoopEventSink
 from gear_agent.config import (
     RuntimeConfig,
@@ -189,7 +188,7 @@ def _prepare_runtime(
     """Composes services; interactive callers omit the optional run observer."""
     config = load_config(_config_path(args, environment), environment)
     runtime = _runtime_from_args(config.runtime, args)
-    return build_agent_runtime(config, runtime, event_sink, observer)
+    return build_agent_runtime(config, runtime, event_sink, observer, environment)
 
 
 def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
@@ -198,13 +197,12 @@ def _run_tui(args: Namespace, environment: Mapping[str, str]) -> None:
     event_sink = TextualAgentLoopEventSink()
     agent = _prepare_runtime(args, environment, event_sink)
     session_id = _session_id_from_args(args, agent.runtime.session_dir)
-    compaction = CompactionService(agent.adapter)
     app = GearApp(
         model=agent.config.model.model,
         session_id=session_id,
         workspace=agent.workspace,
         agent_loop=agent.loop,
-        compaction=compaction,
+        compaction=agent.compaction,
         store=agent.store,
         runtime=agent.runtime,
         model_config=agent.config.model,

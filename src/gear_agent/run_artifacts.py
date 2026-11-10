@@ -127,6 +127,7 @@ class RunArtifacts:
         self.manifest['repository_instructions'] = [event['payload'] for event in observations
                                                     if event['kind'] == 'repository_instructions']
         metrics = self.collector.metrics(status, diagnostic, result is not None, events, self.privacy)
+        self.manifest['model_request_ids'] = [r['request_id'] for r in metrics['model']['requests']]
         self._json('metrics.json', metrics)
         if result is not None:
             self._text('final.txt', self.privacy.exact_text(result.turn.final_text, 'final.txt'))

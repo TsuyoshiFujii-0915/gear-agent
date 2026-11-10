@@ -152,6 +152,10 @@ class RunArtifactTests(unittest.TestCase):
         self.assertEqual(metrics['model']['request_count'], 3)
         self.assertEqual(metrics['model']['total_tokens'], 30)
         self.assertEqual(metrics['outcome']['completed_iterations'], 2)
+        records = metrics['model']['requests']
+        self.assertEqual([r['purpose'] for r in records], ['agent', 'automatic_summary', 'agent'])
+        self.assertEqual([r['iteration'] for r in records], [1, 2, 2])
+        self.assertEqual(len({r['turn_id'] for r in records}), 1)
         self.assertEqual(metrics['context']['automatic_compactions'], 1)
         self.assertEqual(metrics['context']['manual_compactions'], 0)
         self.assertEqual(metrics['context']['budget_failures'], 0)

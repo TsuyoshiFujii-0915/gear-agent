@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from gear_agent.agent.compaction import CompactionService
+from gear_agent.request_events import RequestScope
 from gear_agent.context_budget import ContextBudgetManager, context_budget_error
 
 
@@ -30,9 +31,10 @@ class CompactionStrategy(Protocol):
 class SummaryCompactionStrategy:
     """Uses the existing textual request with a physical-capacity preflight."""
 
-    def __init__(self, service: CompactionService, budget: ContextBudgetManager) -> None:
+    def __init__(self, service: CompactionService, budget: ContextBudgetManager, scope: RequestScope) -> None:
         self._service = service
         self._budget = budget
+        self._scope = scope
 
     def compact(
         self, events: list[dict[str, Any]], timeout_seconds: int,
@@ -52,5 +54,5 @@ class SummaryCompactionStrategy:
         diagnostic = self._budget.evaluate_compaction(request)
         if not diagnostic.fits:
             raise context_budget_error(diagnostic, 'compaction')
-        summary = self._service.summarize_prepared(request, timeout_seconds, stream_idle_timeout_seconds)
+        summary = self._service.summarize_prepared(request, timeout_seconds, stream_idle_timeout_seconds, self._scope)
         return CompactionCandidate('compaction_summary', {'text': summary, 'trigger': 'automatic'}, {'strategy': 'summary'})

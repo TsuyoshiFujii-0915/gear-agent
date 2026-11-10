@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
+from uuid import uuid4
 
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.compaction_strategy import CompactionStrategy, SummaryCompactionStrategy
@@ -36,7 +37,8 @@ from gear_agent.model.events import (
 )
 from gear_agent.model.replay import ReasoningReplayDiagnostic
 from gear_agent.repository import RepositoryContext
-from gear_agent.observation import RunObserver, execute_tool, record_model_usage, request_model
+from gear_agent.observation import RunObserver, execute_tool, request_model
+from gear_agent.request_events import RequestEventSink, RequestScope
 from gear_agent.store.base import ContextStore
 from gear_agent.tools.base import Tool
 from gear_agent.tools.registry import ToolRegistry
@@ -86,6 +88,7 @@ class AgentLoop:
         context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET,
         observer: RunObserver | None = None,
         compaction_config: CompactionConfig = SUMMARY_COMPACTION,
+        lifecycle: RequestEventSink | None = None,
     ) -> None:
         """Binds runtime services and the effective context policy.
 
@@ -98,6 +101,7 @@ class AgentLoop:
             context_budget: Defaults to disabled for existing embedding callers,
                 matching the documented legacy configuration behavior.
             observer: Omitted by existing TUI/embedding callers to disable run-only observations.
+            lifecycle: Session request log and UI notifications when running the application.
             compaction_config: Defaults to summary for legacy embedding callers.
         """
         self._adapter = adapter
@@ -112,9 +116,9 @@ class AgentLoop:
             adapter.generation_options if context_budget.auto_compaction else None,
         )
         self._observer = observer
-        self._compaction = CompactionService(adapter, observer)
+        self._lifecycle = lifecycle
+        self.compaction = CompactionService(adapter, observer, lifecycle)
         self._compaction_config = compaction_config
-        self._summary_strategy: CompactionStrategy = SummaryCompactionStrategy(self._compaction, self._budget_manager)
         self._selective_strategy: CompactionStrategy | None = None
         if compaction_config.jev is not None:
             self._selective_strategy = JevCompactionStrategy(compaction_config.jev, JevClient(compaction_config.jev))
@@ -159,6 +163,7 @@ class AgentLoop:
         finalization_retry_used = False
         pending_replay_diagnostic: ReasoningReplayDiagnostic | None = model_input.diagnostic
 
+        turn_id = str(uuid4())
         for iteration in range(1, max_iterations + 1):
             instructions = self._repository_context.instructions(
                 AGENT_INSTRUCTIONS, self._store.load(session_id),
@@ -167,7 +172,7 @@ class AgentLoop:
             if self._context_budget.auto_compaction:
                 request, pending_replay_diagnostic = self._budgeted_request(
                     request, pending_replay_diagnostic,
-                    session_id, iteration, user_text, finalization_retry_used,
+                    session_id, turn_id, iteration, user_text, finalization_retry_used,
                     timeout_seconds, stream_idle_timeout_seconds,
                 )
                 input_items = cast(list[object], request.input_value)
@@ -185,14 +190,16 @@ class AgentLoop:
             response = request_model(
                 self._adapter, request, timeout_seconds, stream_idle_timeout_seconds,
                 _AgentModelProgressSink(self._event_sink, session_id, iteration),
-                self._observer, 'agent',
+                self._observer, self._lifecycle, RequestScope(session_id, turn_id, iteration, 'agent'),
             )
             self._store.append(
                 session_id,
                 "model_response",
                 response.persisted_payload,
             )
-            record_model_usage(response, self._observer)
+            if self._observer is not None:
+                # Preserve core usage validation after canonical persistence.
+                _ = response.usage
             replayed_output = response.replayed_output
             output_items = replayed_output.items
             function_calls = response.function_calls
@@ -295,6 +302,7 @@ class AgentLoop:
         request: ContextRequest,
         replay_diagnostic: ReasoningReplayDiagnostic | None,
         session_id: str,
+        turn_id: str,
         iteration: int,
         user_text: str,
         finalization_retry_used: bool,
@@ -311,7 +319,7 @@ class AgentLoop:
 
         if self._selective_strategy is not None:
             return self._selective_budgeted_request(
-                request, replay_diagnostic, session_id, iteration, user_text,
+                request, replay_diagnostic, session_id, turn_id, iteration, user_text,
                 finalization_retry_used, timeout_seconds, stream_idle_timeout_seconds,
             )
         before = diagnostic.total_estimated_request_tokens
@@ -320,8 +328,8 @@ class AgentLoop:
                                   'outcome': 'failed'}
         try:
             result = self._summary_budgeted_request(
-                request, session_id, iteration, user_text, finalization_retry_used,
-                timeout_seconds, stream_idle_timeout_seconds,
+                request, session_id, turn_id, iteration, user_text, finalization_retry_used,
+                timeout_seconds, stream_idle_timeout_seconds, 'automatic_summary',
             )
             after = self._budget_manager.evaluate(result[0]).total_estimated_request_tokens
             metrics.update(estimated_input_after=after, reduction_ratio=1 - after / before, outcome='succeeded')
@@ -330,18 +338,20 @@ class AgentLoop:
             self._observe_compaction(metrics)
 
     def _summary_budgeted_request(
-        self, request: ContextRequest, session_id: str, iteration: int,
+        self, request: ContextRequest, session_id: str, turn_id: str, iteration: int,
         user_text: str, finalization_retry_used: bool, timeout_seconds: int,
-        stream_idle_timeout_seconds: int | None,
+        stream_idle_timeout_seconds: int | None, purpose: Literal['automatic_summary', 'jev_summary_fallback'],
     ) -> tuple[ContextRequest, ReasoningReplayDiagnostic | None]:
-        compaction_request = self._compaction.prepare_request(self._store.load(session_id))
+        compaction_request = self.compaction.prepare_request(self._store.load(session_id))
         compaction_diagnostic = self._budget_manager.evaluate_compaction(compaction_request)
         self._event_sink.publish(ContextBudgetEvaluated(
             session_id, iteration, 'compaction', compaction_diagnostic, True, not compaction_diagnostic.fits,
         ))
         if not compaction_diagnostic.fits:
             raise context_budget_error(compaction_diagnostic, 'compaction')
-        candidate = self._summary_strategy.compact(
+        strategy = SummaryCompactionStrategy(self.compaction, self._budget_manager,
+                                             RequestScope(session_id, turn_id, iteration, purpose))
+        candidate = strategy.compact(
             self._store.load(session_id), timeout_seconds, stream_idle_timeout_seconds,
         )
         self._store.append(session_id, candidate.kind, candidate.payload)
@@ -366,7 +376,7 @@ class AgentLoop:
 
     def _selective_budgeted_request(
         self, request: ContextRequest, replay_diagnostic: ReasoningReplayDiagnostic | None,
-        session_id: str, iteration: int, user_text: str, finalization_retry_used: bool,
+        session_id: str, turn_id: str, iteration: int, user_text: str, finalization_retry_used: bool,
         timeout_seconds: int, stream_idle_timeout_seconds: int | None,
     ) -> tuple[ContextRequest, ReasoningReplayDiagnostic | None]:
         if self._selective_strategy is None:
@@ -429,8 +439,8 @@ class AgentLoop:
                 raise
             try:
                 result = self._summary_budgeted_request(
-                    request, session_id, iteration, user_text, finalization_retry_used,
-                    timeout_seconds, stream_idle_timeout_seconds,
+                    request, session_id, turn_id, iteration, user_text, finalization_retry_used,
+                    timeout_seconds, stream_idle_timeout_seconds, 'jev_summary_fallback',
                 )
             except BaseException:
                 metrics['fallback_outcome'] = 'failed'
