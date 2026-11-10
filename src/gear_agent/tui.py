@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
+from math import isfinite
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal, get_args
 
 from gear_agent.agent.events import (
     AgentLoopEvent,
@@ -12,6 +14,7 @@ from gear_agent.agent.events import (
     ToolUseStarted,
 )
 from gear_agent.model.replay import MODEL_RESPONSE_ENVELOPE_SCHEMA
+from gear_agent.request_events import RequestStatus
 
 
 _MAX_PREVIEW_LINES = 6
@@ -87,10 +90,7 @@ def collect_token_usage(events: list[dict[str, Any]]) -> int | None:
         events: Stored session events.
 
     Returns:
-        Total token count, or None when no response usage was reported.
-
-    Raises:
-        ValueError: If a response usage object exists but lacks integer total_tokens.
+        Sum of reported totals, or None if totals are absent or usage is incomplete.
     """
 
     total = 0
@@ -102,18 +102,14 @@ def collect_token_usage(events: list[dict[str, Any]]) -> int | None:
         if not isinstance(payload, dict):
             continue
         response = _model_response_payload(payload)
-        if "usage" not in response:
-            continue
-        usage = response["usage"]
+        usage = response.get("usage")
         if usage is None:
             continue
         if not isinstance(usage, dict):
-            raise ValueError("model_response usage must be an object when present.")
+            return None
         total_tokens = usage.get("total_tokens")
-        if not isinstance(total_tokens, int):
-            raise ValueError(
-                "model_response usage.total_tokens must be an integer when usage is present."
-            )
+        if type(total_tokens) is not int or total_tokens < 0:
+            return None
         total += total_tokens
         found_usage = True
     if not found_usage:
@@ -167,9 +163,80 @@ def format_tokens(token_usage: int | None) -> str:
 
     if token_usage is None:
         return "unavailable"
-    if token_usage < 1000:
-        return str(token_usage)
-    return f"{token_usage / 1000:.1f}k"
+    return _compact_number(token_usage, "count")
+
+
+def _compact_number(value: int | float, kind: Literal["count", "rate"]) -> str:
+    number = Decimal(str(value))
+    if number >= 10**12:
+        return f"{number:.1e}"
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.1f}M"
+    if number >= 1_000:
+        return f"{number / 1_000:.1f}k"
+    if kind == "count":
+        return str(value)
+    return _one_decimal(number)
+
+
+def _one_decimal(value: Decimal) -> str:
+    rounded = f"{value:.1f}"
+    return "<0.1" if value > 0 and rounded == "0.0" else rounded
+
+
+PerformanceValues = tuple[str, str, str]
+IDLE_VALUES: PerformanceValues = ("—",) * 3
+PENDING_VALUES: PerformanceValues = ("Pending",) * 3
+UNAVAILABLE_VALUES: PerformanceValues = ("Unavailable",) * 3
+
+
+def _metric_value(statistics: dict[str, Any], key: str, unit: str) -> int | float | None:
+    metric = statistics.get(key)
+    if not isinstance(metric, dict) or metric.get("unit") != unit:
+        raise ValueError(f"Invalid request statistics for {key}: expected a metric in {unit}.")
+    if metric.get("availability") != "available":
+        return None
+    value = metric.get("value")
+    if type(value) not in (int, float) or value < 0 or (isinstance(value, float) and not isfinite(value)):
+        return None
+    if (unit == "fraction" and value > 1) or (unit == "tokens" and type(value) is not int):
+        return None
+    return value
+
+
+def performance_values(record: dict[str, Any]) -> PerformanceValues:
+    """Formats the terminal request projection shared by live events and the log.
+
+    Args:
+        record: A schema 1 terminal observation.
+
+    Returns:
+        Display values for prefill, decode and cached input, respectively.
+
+    Raises:
+        ValueError: If the record has an unknown status or malformed statistics.
+    """
+    status = record.get("status")
+    if status not in get_args(RequestStatus):
+        raise ValueError("Unrecognized terminal status in request log.")
+    if status != "success":
+        return ("Interrupted",) * 3
+    statistics = record.get("statistics")
+    if statistics is None:
+        return UNAVAILABLE_VALUES
+    if not isinstance(statistics, dict):
+        raise ValueError("Invalid terminal statistics in request log.")
+
+    def rate(key: str) -> str:
+        value = _metric_value(statistics, key, "tokens/s")
+        return "Unavailable" if value is None else f"{_compact_number(value, 'rate')} tok/s"
+
+    ratio = _metric_value(statistics, "cache_hit_ratio", "fraction")
+    count = _metric_value(statistics, "cached_tokens", "tokens")
+    cache = "Unavailable" if ratio is None else f"{_one_decimal(Decimal(str(ratio)) * 100)}%"
+    if count is not None:
+        cache += f" ({_compact_number(count, 'count')} tok)"
+    return rate("prefill_rate"), rate("decode_rate"), cache
 
 
 def format_progress_event(event: AgentLoopEvent) -> str:
