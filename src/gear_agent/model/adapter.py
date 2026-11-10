@@ -88,7 +88,11 @@ class ModelAdapter(Protocol):
         stream_idle_timeout_seconds: float | None,
         progress_sink: ModelProgressEventSink,
     ) -> ModelResponse:
-        """Executes one response, propagating model errors explicitly."""
+        """Executes one response, propagating model errors explicitly.
+
+        A TimedProgressSink receives dispatch at the transport boundary
+        after preflight and before the first network operation.
+        """
         ...
 
     def tool_result_item(self, call_id: str, result: dict[str, object]) -> object:

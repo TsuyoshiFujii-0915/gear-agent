@@ -11,8 +11,9 @@ uv run gear --workdir ../project run --prompt-file task.txt --run-dir ../results
 An existing directory, file or symlink is rejected, even if empty. The directory
 is reserved with mode 0700. `run_id` is a fresh UUID independent of the canonical
 `session_id`. Canonical sessions continue to use `runtime.session_dir`; changing
-the artifact destination does not relocate or change them. The TUI and direct
-`run_task` embedding API retain their existing persistence behavior.
+the artifact destination does not relocate or change them. The runtime also
+appends one terminal request record to
+`<runtime.session_dir>/<session-id>.requests.ndjson` in TUI and headless mode.
 
 ## Files and completion protocol
 
@@ -88,9 +89,9 @@ replacement conversation format and are not replayed into model history.
 
 | Observer kind | Payload |
 | --- | --- |
-| `model_request_started` | `purpose`: `agent` or `compaction` |
-| `model_request_finished` | purpose, monotonic duration, unavailable usage placeholder, nullable error |
-| `model_usage` | provider-reported usage for the preceding completed request, observed after canonical response persistence |
+| `model_request_started` | Request ID, UTC start, session/turn/iteration/purpose and safe target identity |
+| `model_request_finished` | Same request identity, status, terminal statistics, client arrival measurements and missing reasons |
+| `request_log_write_failed` | Session and request ID of an unsuccessful sidecar write |
 | `tool_started` | name, call_id |
 | `tool_finished` | name, call_id, monotonic duration, successful, nullable error |
 | `iteration_completed` | completed agent iteration number |
@@ -98,9 +99,12 @@ replacement conversation format and are not replayed into model history.
 | `context_budget` | existing context diagnostic, phase, iteration, trigger/failure flags |
 | `reasoning_replay` | existing replay mode and reused/dropped counts |
 
-Execution is sequential. Requests correlate by ordered start/finish pairs;
-`call_id` correlates tool observations with canonical events. Streaming text,
-reasoning text and argument deltas are deliberately not recorded.
+Join start, finish, `metrics.json.model.requests`, terminal `run.json.model_request_ids`
+and the session sidecar by `request_id`. They describe the same dispatch.
+Tool observations retain their canonical `call_id`. Older snapshots contain
+separate `model_usage` events and may lack request IDs. Read their existing
+metrics directly and leave absent fields unknown.
+[Request log schema](decisions/0038-record-model-request-lifecycle.md)
 
 ## Metrics
 
@@ -113,6 +117,12 @@ reasoning text and argument deltas are deliberately not recorded.
   are null when any request lacks that category. The available per-request values
   are retained. Zero requests yields null token totals. Total tokens are never
   reconstructed from input/output counts. Invalid reported counts fail explicitly.
+- `model.cache_by_purpose`: weighted `ratio` equals the sum of cached reads
+  divided by the sum of input tokens over the same valid request pairs.
+  Each group includes both sums, `included`, `requests` and counts by
+  `excluded` reason. Valid zero/zero pairs count towards coverage. An empty
+  set or a zero denominator yields a null ratio. Available terminal reports
+  from unsuccessful requests participate under their own request status.
 - `tools`: total calls, success/failure counts, per-name totals and ordered timings.
   Thrown failures, explicit error results, nonzero shell exit and shell timeout
   count as failure, including recoverable failures returned to the model.

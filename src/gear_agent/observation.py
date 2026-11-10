@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from asyncio import CancelledError
+from concurrent.futures import CancelledError as FutureCancelledError
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Protocol
+from uuid import uuid4
 
 from gear_agent.context_budget import ContextRequest
 from gear_agent.errors import GearError
 from gear_agent.model.adapter import ModelAdapter, ModelResponse
+from gear_agent.model.arrival import RequestTarget, TimedProgressSink
 from gear_agent.model.events import ModelProgressEventSink
+from gear_agent.model.responses import ResponseFailure
+from gear_agent.request_events import (
+    RequestError, RequestEventSink, RequestFinished, RequestScope, RequestStarted, RequestStatus,
+)
 from gear_agent.tools.registry import ToolRegistry
 
 
@@ -34,58 +42,74 @@ def error_identity(error: BaseException) -> dict[str, str]:
             'message': 'Execution stopped with an unstructured exception.'}
 
 
+_ERROR_STATUS: dict[str, RequestStatus] = {
+    'response_incomplete': 'incomplete',
+    'response_failed': 'provider_failure', 'response_stream_error': 'provider_failure',
+    'http_status_error': 'provider_failure',
+    'http_timeout': 'timeout', 'http_stream_idle_timeout': 'timeout',
+    'response_stream_terminated': 'eof',
+    'http_request_failed': 'transport_error', 'http_stream_failed': 'transport_error',
+    'response_status_invalid': 'invalid_response', 'response_stream_event_invalid': 'invalid_response',
+    'json_parse_failed': 'invalid_response', 'json_shape_invalid': 'invalid_response',
+    'http_sse_invalid': 'invalid_response',
+}
+
+
+def _request_failure(error: BaseException) -> tuple[RequestStatus, RequestError]:
+    if isinstance(error, (KeyboardInterrupt, CancelledError, FutureCancelledError)):
+        return 'cancelled', RequestError('cancelled', 'model_request')
+    if isinstance(error, GearError) and error.error_type in _ERROR_STATUS:
+        status = _ERROR_STATUS[error.error_type]
+        if error.error_type == 'response_status_invalid' and error.details.get('status') == 'cancelled':
+            status = 'cancelled'
+        origin = error.origin if error.origin in ('responses_stream', 'model_client') else 'model_request'
+        return status, RequestError(error.error_type, origin)
+    return 'execution_error', RequestError('execution_error', 'model_request')
+
+
 def request_model(
     adapter: ModelAdapter, request: ContextRequest, timeout_seconds: int,
     stream_idle_timeout_seconds: int | None, progress_sink: ModelProgressEventSink,
-    observer: RunObserver | None, purpose: str,
+    observer: RunObserver | None, lifecycle: RequestEventSink | None, scope: RequestScope,
 ) -> ModelResponse:
-    """Measures one dispatched request, including compaction and failed requests.
-
-    Args:
-        adapter: Configured model boundary.
-        request: Exact effective request.
-        timeout_seconds: Request timeout.
-        stream_idle_timeout_seconds: Streaming idle timeout.
-        progress_sink: Existing presentation sink.
-        observer: Absent for callers not collecting run observations.
-        purpose: Agent or compaction request identity.
-
-    Returns:
-        Original canonical response.
-    """
-    if observer is None:
+    """Measures a single adapter dispatch and publishes its terminal observation."""
+    if lifecycle is None and observer is None:
         return adapter.create_response(request.input_value, request.tools, request.instructions,
                                        timeout_seconds, stream_idle_timeout_seconds, progress_sink)
-    observer.record('model_request_started', {'purpose': purpose})
-    started = perf_counter()
+    started: RequestStarted | None = None
+
+    def dispatch(target: RequestTarget) -> None:
+        nonlocal started
+        event = RequestStarted(str(uuid4()), scope, target, datetime.now(timezone.utc).isoformat())
+        if observer is not None:
+            observer.record('model_request_started', event.payload())
+        if lifecycle is not None:
+            lifecycle.publish(event)
+        started = event
+
+    def publish_finished(finished: RequestFinished) -> None:
+        if observer is not None:
+            observer.record('model_request_finished', finished.payload())
+        if lifecycle is not None:
+            lifecycle.publish(finished)
+
+    timing = TimedProgressSink(progress_sink, perf_counter, dispatch)
     try:
         response = adapter.create_response(request.input_value, request.tools, request.instructions,
-                                           timeout_seconds, stream_idle_timeout_seconds, progress_sink)
+                                           timeout_seconds, stream_idle_timeout_seconds, timing)
     except BaseException as error:
-        observer.record('model_request_finished', {
-            'purpose': purpose, 'duration_seconds': perf_counter() - started,
-            'usage': None, 'error': error_identity(error),
-        })
+        if started is None:
+            raise
+        statistics = error.statistics if isinstance(error, ResponseFailure) else timing.terminal_statistics
+        client = timing.finish(started.target.stream, 'interrupted_before_report' if statistics is None else 'not_observed')
+        status, identity = _request_failure(error)
+        publish_finished(RequestFinished(started, status, statistics, client, identity))
         raise
-    duration = perf_counter() - started
-    observer.record('model_request_finished', {
-        'purpose': purpose, 'duration_seconds': duration, 'usage': None, 'error': None,
-    })
+    if started is None:
+        raise RuntimeError('Model adapter returned a response without reporting dispatch.')
+    client = timing.finish(started.target.stream, 'not_applicable')
+    publish_finished(RequestFinished(started, 'success', response.statistics, client, None))
     return response
-
-
-def record_model_usage(response: ModelResponse, observer: RunObserver | None) -> None:
-    """Observes usage after the caller has persisted its canonical model response.
-
-    Args:
-        response: Received model result, already persisted when part of a turn.
-        observer: Absent for callers not collecting run observations.
-
-    Raises:
-        GearError: If provider-reported usage is invalid; canonical history remains.
-    """
-    if observer is not None:
-        observer.record('model_usage', {'usage': asdict(response.usage)})
 
 
 def execute_tool(

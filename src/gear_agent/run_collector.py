@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
 from gear_agent import observation
 from gear_agent.agent.events import AgentLoopEvent, ContextBudgetEvaluated, ReasoningReplayEvaluated
+from gear_agent.request_events import RequestLogWriteFailed
 from gear_agent.artifact_privacy import ArtifactPrivacy
 
 
@@ -15,6 +17,7 @@ class EvalRunCollector:
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
         self._started: float | None = None
+        self._request_events: dict[tuple[str, str], dict[str, Any]] = {}
 
     def start(self) -> None:
         """Starts wall-duration measurement at the artifact initialization boundary."""
@@ -22,6 +25,16 @@ class EvalRunCollector:
 
     def record(self, kind: str, payload: dict[str, Any]) -> None:
         """Records a versioned, complete observation with a UTC correlation time."""
+        if kind in ('model_request_started', 'model_request_finished'):
+            request_id = payload['request_id']
+            key = (kind, request_id)
+            if key in self._request_events:
+                if self._request_events[key] != payload:
+                    raise ValueError(f'Conflicting {kind} observation for request {request_id}.')
+                return
+            if kind == 'model_request_finished' and ('model_request_started', request_id) not in self._request_events:
+                raise ValueError(f'Finished observation without a start for request {request_id}.')
+            self._request_events[key] = payload
         self.events.append({'schema_version': 1, 'kind': kind, 'payload': payload,
                             'created_at': datetime.now(timezone.utc).isoformat()})
 
@@ -31,6 +44,8 @@ class EvalRunCollector:
             self.record('context_budget', asdict(event))
         elif isinstance(event, ReasoningReplayEvaluated):
             self.record('reasoning_replay', asdict(event))
+        elif isinstance(event, RequestLogWriteFailed):
+            self.record('request_log_write_failed', asdict(event))
 
     def metrics(
         self, status: str, error: dict[str, str] | None, final_text_produced: bool,
@@ -50,14 +65,7 @@ class EvalRunCollector:
         """
         if self._started is None:
             raise RuntimeError('Run collector was not started.')
-        requests: list[dict[str, Any]] = []
-        for event in self.events:
-            if event['kind'] == 'model_request_finished':
-                requests.append(dict(event['payload']))
-            elif event['kind'] == 'model_usage':
-                if not requests or requests[-1]['usage'] is not None:
-                    raise RuntimeError('Model usage observation has no unmatched completed request.')
-                requests[-1]['usage'] = event['payload']['usage']
+        requests = self._payloads('model_request_finished')
         tool_calls = self._payloads('tool_finished')
         by_name: dict[str, dict[str, Any]] = {}
         for call in tool_calls:
@@ -67,7 +75,8 @@ class EvalRunCollector:
             entry['successful' if call['successful'] else 'failed'] += 1
             entry['duration_seconds'] += call['duration_seconds']
         model: dict[str, Any] = {'request_count': len(self._payloads('model_request_started')),
-                                'requests': requests}
+                                'requests': requests,
+                                'cache_by_purpose': _cache_by_purpose(requests)}
         for category in ('input_tokens', 'output_tokens', 'total_tokens'):
             counts = [r['usage'][category] if r['usage'] is not None else None for r in requests]
             model[category] = sum(counts) if counts and all(c is not None for c in counts) else None
@@ -105,3 +114,27 @@ class EvalRunCollector:
 
     def _payloads(self, kind: str) -> list[dict[str, Any]]:
         return [event['payload'] for event in self.events if event['kind'] == kind]
+
+def _cache_by_purpose(requests: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Weights cached reads by valid paired input counts within each request purpose."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in requests:
+        groups.setdefault(row['purpose'], []).append(row)
+    result: dict[str, dict[str, Any]] = {}
+    for purpose, rows in groups.items():
+        cached = inputs = included = 0
+        excluded: Counter[str] = Counter()
+        for row in rows:
+            stats = row['statistics']
+            if stats is None:
+                excluded[row['statistics_reason']] += 1
+            elif stats['input_tokens']['value'] is None or stats['cached_tokens']['value'] is None:
+                excluded[stats['cache_hit_ratio']['reason']] += 1
+            else:
+                included += 1
+                cached += stats['cached_tokens']['value']
+                inputs += stats['input_tokens']['value']
+        result[purpose] = {'ratio': cached / inputs if inputs else None, 'included': included,
+                           'requests': len(rows), 'cached_tokens': cached if included else None,
+                           'input_tokens': inputs if included else None, 'excluded': dict(excluded)}
+    return result

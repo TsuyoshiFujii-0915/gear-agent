@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
+from gear_agent.request_events import RequestFinished, RequestLogWriteFailed, RequestStarted
 from gear_agent.config import ReasoningReplayMode
 from gear_agent.context_budget import ContextBudgetDiagnostic
 
@@ -132,6 +133,9 @@ class ToolUseFinished:
 
 AgentLoopEvent: TypeAlias = (
     ModelRequestStarted
+    | RequestStarted
+    | RequestFinished
+    | RequestLogWriteFailed
     | ContextBudgetEvaluated
     | ModelTextDelta
     | ModelReasoningSummaryDelta

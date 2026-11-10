@@ -50,16 +50,16 @@ def validate_response_completion(
         details: dict[str, object] = {'reason': 'invalid_status'}
         if isinstance(status, str) and status in ('cancelled', 'queued', 'in_progress'):
             details['status'] = status
-        raise gear_error(
+        raise ResponseFailure(
             'response_status_invalid', 'Model response status is not completed.',
-            origin, True, details,
+            origin, True, details, statistics,
         )
     if response.get('error') is not None:
         raise response_failure_error('response_failed', response, origin, statistics)
     if response.get('incomplete_details') is not None:
-        raise gear_error(
+        raise ResponseFailure(
             'response_status_invalid', 'Model response has conflicting incomplete details.',
-            origin, True, {'reason': 'conflicting_incomplete_details'},
+            origin, True, {'reason': 'conflicting_incomplete_details'}, statistics,
         )
 
 

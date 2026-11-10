@@ -14,6 +14,7 @@ from time import perf_counter
 from typing import Any
 
 from gear_agent.agent.compaction import CompactionService
+from gear_agent.request_events import RequestScope
 from gear_agent.agent.compaction_strategy import CompactionCandidate, SummaryCompactionStrategy
 from gear_agent.agent.events import SilentAgentLoopEventSink
 from gear_agent.agent.history import build_model_history
@@ -329,7 +330,7 @@ def run(config_path: Path, directory: Path, jev_model: str, jev_timeout: int, so
                 write_json(output / 'request.json', asdict(service.prepare_request(events)))
                 strategy = SummaryCompactionStrategy(service, ContextBudgetManager(
                     DISABLED_CONTEXT_BUDGET, ByteTokenEstimator(), adapter.generation_options,
-                ))
+                ), RequestScope('source', None, None, 'manual_summary'))
             else:
                 strategy = JevCompactionStrategy(jev_config, RecordingJev(JevClient(jev_config), output))
             started = perf_counter()

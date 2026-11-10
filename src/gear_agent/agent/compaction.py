@@ -10,7 +10,8 @@ from gear_agent.model.adapter import ModelAdapter
 from gear_agent.model.events import SilentModelProgressEventSink
 from gear_agent.model.replay import strip_opaque_reasoning_from_event
 from gear_agent.store.base import ContextStore
-from gear_agent.observation import RunObserver, record_model_usage, request_model
+from gear_agent.observation import RunObserver, request_model
+from gear_agent.request_events import RequestEventSink, RequestScope
 
 
 COMPACTION_INSTRUCTIONS = "Summarize effective Gear Agent session context for future continuation."
@@ -19,10 +20,12 @@ COMPACTION_INSTRUCTIONS = "Summarize effective Gear Agent session context for fu
 class CompactionService:
     """Creates explicit summaries for stored session history."""
 
-    def __init__(self, adapter: ModelAdapter, observer: RunObserver | None = None) -> None:
+    def __init__(self, adapter: ModelAdapter, observer: RunObserver | None = None,
+                 lifecycle: RequestEventSink | None = None) -> None:
         """Binds services; existing interactive callers omit run-only observation."""
         self._adapter = adapter
         self._observer = observer
+        self._lifecycle = lifecycle
 
     def compact(
         self,
@@ -88,7 +91,8 @@ class CompactionService:
         Raises:
             GearError: If the model fails or returns no summary.
         """
-        summary = self.summarize_prepared(request, timeout_seconds, stream_idle_timeout_seconds)
+        scope = RequestScope(session_id, None, None, 'manual_summary' if trigger == 'manual' else 'automatic_summary')
+        summary = self.summarize_prepared(request, timeout_seconds, stream_idle_timeout_seconds, scope)
         payload = {'text': summary}
         if trigger == 'automatic':
             payload['trigger'] = trigger
@@ -97,7 +101,7 @@ class CompactionService:
 
     def summarize_prepared(
         self, request: ContextRequest, timeout_seconds: int,
-        stream_idle_timeout_seconds: int | None,
+        stream_idle_timeout_seconds: int | None, scope: RequestScope,
     ) -> str:
         """Executes a textual request without committing a checkpoint.
 
@@ -111,9 +115,10 @@ class CompactionService:
         """
         response = request_model(
             self._adapter, request, timeout_seconds, stream_idle_timeout_seconds,
-            SilentModelProgressEventSink(), self._observer, 'compaction',
+            SilentModelProgressEventSink(), self._observer, self._lifecycle, scope,
         )
-        record_model_usage(response, self._observer)
+        if self._observer is not None:
+            _ = response.usage
         summary = response.text
         if summary.strip() == "":
             raise gear_error(

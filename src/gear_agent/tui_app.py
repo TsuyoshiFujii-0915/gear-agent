@@ -27,6 +27,7 @@ from gear_agent.agent.events import (
     ToolUseFinished,
     ToolUseStarted,
 )
+from gear_agent.request_events import RequestStarted, RequestFinished, RequestLogWriteFailed
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.loop import AgentLoop
 from gear_agent.config import ModelConfig, RuntimeConfig
@@ -235,6 +236,7 @@ class GearApp(App[None]):
         super().__init__()
         self._model = model
         self._session_id = session_id
+        self.latest_agent_request: RequestStarted | RequestFinished | None = None
         self._workspace = workspace
         self._agent_loop = agent_loop
         self._compaction = compaction
@@ -388,6 +390,18 @@ class GearApp(App[None]):
     def _apply_progress_events(self, events: tuple[AgentLoopEvent, ...]) -> None:
         chat = self.query_one("#chat", RichLog)
         for event in events:
+            if isinstance(event, RequestLogWriteFailed):
+                if event.session_id == self._session_id:
+                    self.notify(f'Could not save statistics for request {event.request_id}.', severity='warning')
+                continue
+            if isinstance(event, RequestStarted):
+                if event.scope.session_id == self._session_id and event.scope.purpose == 'agent':
+                    self.latest_agent_request = event
+                continue
+            if isinstance(event, RequestFinished):
+                if self.latest_agent_request == event.request:
+                    self.latest_agent_request = event
+                continue
             if isinstance(event, ContextBudgetEvaluated):
                 self._require_current_session(event.session_id)
                 continue

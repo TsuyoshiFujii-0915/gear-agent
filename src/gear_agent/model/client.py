@@ -5,6 +5,7 @@ import json
 
 from gear_agent.config import ModelConfig, ReasoningReplayMode
 from gear_agent.errors import GearError, gear_error
+from gear_agent.model.arrival import RequestTarget, TimedProgressSink
 from gear_agent.model.events import (
     ModelProgressEventSink,
     SilentModelProgressEventSink,
@@ -182,6 +183,18 @@ class ModelClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        if config.stream and stream_idle_timeout_seconds is None:
+            raise gear_error(
+                "stream_idle_timeout_missing",
+                "Streaming requires an explicit model stream idle timeout.",
+                "model_client",
+                True,
+                {"url": config.url},
+            )
+
+        if isinstance(progress_sink, TimedProgressSink):
+            progress_sink.dispatch(RequestTarget.from_config(config))
+
         if not config.stream:
             response = self._transport.post_json(
                 config.url,
@@ -192,15 +205,7 @@ class ModelClient:
             statistics = json_statistics(response)
             validate_response_completion(response, 'model_client', statistics)
             return ReceivedResponse(response, statistics)
-        if stream_idle_timeout_seconds is None:
-            raise gear_error(
-                "stream_idle_timeout_missing",
-                "Streaming requires an explicit model stream idle timeout.",
-                "model_client",
-                True,
-                {"url": config.url},
-            )
-
+        assert stream_idle_timeout_seconds is not None
         assembler = ResponsesStreamAssembler(progress_sink)
         for sse_event in self._transport.post_sse(
             config.url,
@@ -229,5 +234,7 @@ class ModelClient:
                     True,
                     {"sse_event": sse_event.event},
                 )
+            if isinstance(progress_sink, TimedProgressSink):
+                progress_sink.observe(event)
             assembler.consume(event)
         return assembler.finish_with_statistics()
