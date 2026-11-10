@@ -812,6 +812,24 @@ Shell tool の Docker image はコード側で `python:3.11-slim` に固定し�
 
 `/compact` は現在のセッション履歴をモデルへ送り、継続用の要約を `.gear/sessions` に保存します。
 
+## モデル要求ごとの統計
+
+TUI と `gear run` は、通常要求・手動要約・自動要約・Jev の要約フォールバックの終了時に、
+`<runtime.session_dir>/<session-id>.requests.ndjson` へ 1 行ずつ追記します。
+各行の `request_id` で、UI の開始・終了通知と headless の成果物を照合できます。
+セッション再開後も同じファイルに追記されます。会話の復元と要約には従来の履歴を使います。
+
+`statistics` にはサーバー報告のトークン数、キャッシュ、prefill/decode の計数・時間・速度と、
+各値の単位・取得元・導出式・欠測理由が入ります。`client` は Gear の単調時計による秒数です。
+`total` は要求全体、`first_content` は本文・reasoning・ツール引数の最初の非空の内容、
+`first_answer` は最初の非空の回答文の到着までを表します。`basis` で delta と
+終端スナップショットを識別できます。ネットワークやプロキシによる遅延も到着時間に含まれます。
+
+非ストリーミングの到着時間は `null`（`non_streaming`）、ツール呼び出しのみで成功した場合の
+`first_answer` は `null`（`not_applicable`）です。失敗時も受信済みの終端統計を保持し、
+終端報告を受け取る前に終了した場合は `statistics_reason` に `interrupted_before_report` を記録します。
+旧ログにない値は未計測として扱います。[要求ログのスキーマと計測境界](docs/decisions/0038-record-model-request-lifecycle.md)
+
 ## 評価実行の成果物
 
 `gear run` は実行ごとに `<workspace>/.gear/runs/<run-id>/` を作成し、
