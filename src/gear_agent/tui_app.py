@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.markup import escape
 from rich.markdown import Markdown as RichMarkdown
 from rich.padding import Padding
 from rich.table import Table
@@ -31,15 +32,21 @@ from gear_agent.request_events import RequestStarted, RequestFinished, RequestLo
 from gear_agent.agent.compaction import CompactionService
 from gear_agent.agent.loop import AgentLoop
 from gear_agent.config import ModelConfig, RuntimeConfig
+from gear_agent.model.arrival import RequestTarget
 from gear_agent.store.jsonl import JsonlContextStore
 from gear_agent.tui import (
+    IDLE_VALUES,
+    PENDING_VALUES,
+    UNAVAILABLE_VALUES,
     ChatLine,
+    PerformanceValues,
     collect_chat_lines,
     collect_token_usage,
     compact_path,
     compact_session,
     format_progress_event,
     format_tokens,
+    performance_values,
 )
 
 # Engineering-grade theme — graphite base with machined-brass and steel accents.
@@ -166,9 +173,15 @@ Rule {{
     scrollbar-background: {_BG};
 }}
 
+#performance-status {{
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0 3;
+}}
+
 #input-bar {{
     height: 1;
-    margin: 1 0;
+    margin: 0 0 1 0;
     padding: 0 3;
     background: {_BG};
     layout: horizontal;
@@ -193,6 +206,39 @@ Input:focus {{
     border: none;
 }}
 """
+
+
+@dataclass(frozen=True)
+class _PerformanceRow:
+    values: PerformanceValues
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        """Packs whole metrics, then label and value groups on very narrow screens."""
+        line = Text()
+        separator = Text(" │ ", style=_MUTED)
+        for label, value in zip(("PREFILL", "DECODE", "CACHE HIT"), self.values, strict=True):
+            primary, _, count = value.partition(" (")
+            style = _MUTED if primary in ("—", "Unavailable") else _STEEL
+            parts = [Text(label, style=_MUTED), Text(primary, style=style)]
+            if count:
+                parts.append(Text("(" + count, style=_STEEL))
+            field = Text(" ").join(parts)
+            if line and line.cell_len + separator.cell_len + field.cell_len > options.max_width:
+                yield line
+                line = Text()
+            if line:
+                line.append_text(separator)
+            if field.cell_len <= options.max_width:
+                line.append_text(field)
+                continue
+            for part in parts:
+                if line and line.cell_len + 1 + part.cell_len > options.max_width:
+                    yield line
+                    line = Text()
+                if line:
+                    line.append(" ")
+                line.append_text(part)
+        yield line
 
 
 class AgentProgress(Message):
@@ -242,7 +288,8 @@ class GearApp(App[None]):
         self._compaction = compaction
         self._store = store
         self._runtime = runtime
-        self._model_config = model_config
+        self._request_target = RequestTarget.from_config(model_config)
+        self._seen_agent_requests: set[str] = set()
         self._initial_events = store.load(session_id)
         self._token_usage: int | None = None
         self._progress_sink: TextualAgentLoopEventSink | None = None
@@ -256,16 +303,46 @@ class GearApp(App[None]):
         yield RichLog(id="chat", markup=True, highlight=False, wrap=True, auto_scroll=True)
         yield Static("", id="model-progress", markup=False)
         yield Rule()
+        yield Static(_PerformanceRow(IDLE_VALUES), id="performance-status", markup=False)
         with Horizontal(id="input-bar"):
             yield Static("▌ ›", id="prompt")
             yield Input(id="input", placeholder="enter a request")
 
     def on_mount(self) -> None:
         self.console.push_theme(_MARKDOWN_THEME)
+        self._show_performance(self._restore_performance())
         self._token_usage = collect_token_usage(self._initial_events)
         self.query_one("#header", Static).update(self._build_header())
         self._render_history(collect_chat_lines(self._initial_events))
         self.query_one(Input).focus()
+
+    def _show_performance(self, values: PerformanceValues) -> None:
+        self.query_one("#performance-status", Static).update(_PerformanceRow(values))
+
+    def _restore_performance(self) -> PerformanceValues:
+        try:
+            latest = None
+            has_agent_records = False
+            for record in self._store.agent_requests(self._session_id):
+                has_agent_records = True
+                if (record["model_identity"], record["endpoint_identity"]) != (
+                    self._request_target.model_identity, self._request_target.endpoint_identity
+                ):
+                    continue
+                # Schema 1 uses UTC ISO timestamps. Overlapping requests may finish out of order.
+                if latest is None or record["started_at"] >= latest["started_at"]:
+                    latest = record
+            if latest is not None:
+                self._seen_agent_requests.add(latest["request_id"])
+                return performance_values(latest)
+            if not has_agent_records and any(
+                event.get("kind") in ("assistant_message", "model_response") for event in self._initial_events
+            ):
+                return UNAVAILABLE_VALUES
+            return IDLE_VALUES
+        except (OSError, ValueError) as error:
+            self.notify(f"Could not restore request statistics ({error}).", severity="warning", markup=False)
+            return UNAVAILABLE_VALUES
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         user_text = event.value.strip()
@@ -395,12 +472,20 @@ class GearApp(App[None]):
                     self.notify(f'Could not save statistics for request {event.request_id}.', severity='warning')
                 continue
             if isinstance(event, RequestStarted):
-                if event.scope.session_id == self._session_id and event.scope.purpose == 'agent':
+                if (
+                    event.scope.session_id == self._session_id
+                    and event.scope.purpose == "agent"
+                    and event.target == self._request_target
+                    and event.request_id not in self._seen_agent_requests
+                ):
+                    self._seen_agent_requests.add(event.request_id)
                     self.latest_agent_request = event
+                    self._show_performance(PENDING_VALUES)
                 continue
             if isinstance(event, RequestFinished):
                 if self.latest_agent_request == event.request:
                     self.latest_agent_request = event
+                    self._show_performance(performance_values(event.payload()))
                 continue
             if isinstance(event, ContextBudgetEvaluated):
                 self._require_current_session(event.session_id)
@@ -500,13 +585,13 @@ class GearApp(App[None]):
         sep = f"  [{_LINE}]│[/{_LINE}]  "
         status = sep.join(
             [
-                f"[{_MUTED}]model[/{_MUTED}] [{_STEEL}]{self._model}[/{_STEEL}]",
-                f"[{_MUTED}]session[/{_MUTED}] {compact_session(self._session_id)}",
+                f"[{_MUTED}]model[/{_MUTED}] [{_STEEL}]{escape(self._model)}[/{_STEEL}]",
+                f"[{_MUTED}]session[/{_MUTED}] {escape(compact_session(self._session_id))}",
                 f"[{_MUTED}]tokens[/{_MUTED}] [{_BRASS}]{format_tokens(self._token_usage)}[/{_BRASS}]",
             ]
         )
         grid.add_row(f"[bold {_BRASS}]⚙ GEAR AGENT[/bold {_BRASS}]", status)
-        grid.add_row(f"[{_MUTED}]{compact_path(self._workspace)}[/{_MUTED}]", "")
+        grid.add_row(f"[{_MUTED}]{escape(compact_path(self._workspace))}[/{_MUTED}]", "")
         return grid
 
 
