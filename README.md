@@ -15,7 +15,7 @@ Codex の中核動作を理解しやすい Python コードとして表現する
 - OpenAI と LM Studio などの互換エンドポイントを設定で切り替え
 - 関数ツール呼び出しを含むエージェントループ
 - ファイル読み取り、ファイル書き込み、シェル実行、パッチ適用ツール
-- Tavily / treg（TinyFish direct）/ DeepSeek / Firecrawl / Exa を独立に選べる Web 検索、Web ページ本文取得ツール
+- Tavily / treg（TinyFish direct）/ DeepSeek / Firecrawl / Exa を独立に選べる Web 検索、Web ページ本文取得ツール。検索のみ RustXNG external にも対応
 - JSONL によるセッションイベント保存
 
 ## 必要なもの
@@ -252,8 +252,8 @@ Strataが対応しないprovider-hostedな `type = "web_search"` とは別です
 
 `web_search` と `web_fetch` は独立した `provider` を選択します。
 主モデルの設定からは独立しています。現在実装されているプロバイダは両方とも
-`tavily`、`treg`、`deepseek`、`firecrawl`、`exa` です。これら以外の provider を
-指定すると設定エラーになります。
+`tavily`、`treg`、`deepseek`、`firecrawl`、`exa` です。`web_search` は検索専用の
+`rustxng`（external 接続）も選択できます。これら以外の provider は設定エラーになります。
 
 ```toml
 [tool]
@@ -319,7 +319,8 @@ API仕様は [Tavily Search](https://docs.tavily.com/documentation/api-reference
 Tavily / Exa の応答から最終リダイレクト先を確定できないため、`final_url` は `null` です。
 未報告の title / score / usage は `null` または欠落で表し、検索0件は正常な空配列です。
 空本文・部分失敗・HTTP 200内のerror・不正JSON・本文上限超過はエラーになります。
-無断の要約・切り詰めは行いません。
+無断の要約・切り詰めは行いません。RustXNG 検索の部分失敗と明示的な snippet 切り詰めは、
+下記の専用契約に従います。
 
 Web通信はホストから、Tavily 選択時は `https://api.tavily.com/search` または `/extract`、
 Firecrawl 選択時は `https://api.firecrawl.dev/v2/search` または `/v2/scrape` へ送信します。
@@ -347,6 +348,94 @@ JSONL・Jev・要約・再開は既存のツール結果契約を利用します
 設計判断は [ADR 0023](docs/decisions/0023-select-web-providers-independently.md) と
 [ADR 0024](docs/decisions/0024-bound-web-provider-http-and-url-inputs.md) に記録しています。
 認証付きlive検証は、各プロバイダの実装Issueで別途実施します。
+
+### RustXNG external（検索のみ）
+
+起動済みの RustXNG を `web_search` の provider として利用できます。native / Docker /
+リモートのいずれも同じ接続設定です。Gear はサーバーの探索・起動・停止・更新、Docker 操作、
+設定変更を行いません。managed 起動管理は #51、明示セットアップは #52 の対象です。
+
+既存設定の `[tool]` で `web_search = true` にし、`[web_search]` を次に置き換えます。
+`web_fetch` は別に選択でき、RustXNG による本文取得は実装していません。
+
+```toml
+[web_search]
+provider = "rustxng"
+max_results = 5
+timeout_seconds = 20
+# Optional: only for a reverse proxy requiring Bearer authentication.
+# api_key_env = "RUSTXNG_TOKEN"
+
+[web_search.rustxng]
+mode = "external"
+base_url = "http://127.0.0.1:29483"
+```
+
+`mode` / `base_url` / `max_results` / `timeout_seconds` は必須です。`mode` は `external` のみ、
+件数は 1–200、タイムアウトは 1–300 秒です。タイムアウトは既存 HTTP provider と同じく
+HTTPX の接続・読み込み・書き込み・接続プール待ちに適用します。
+engine / language / safesearch 等は初版では設定として公開せず、未知の項目はエラーにします。
+query の検索構文は RustXNG に渡すため、Gear は engine のアクセス制御を保証しません。
+
+キーレスなら `api_key_env` を省略してください。Authorization ヘッダーを送信しません。
+指定した場合は環境変数に空白・制御文字を含まない非空 ASCII トークンが必要です。
+他 provider の必須キー条件は変わりません。API 接続先は利用者が固定し、HTTP(S) の
+localhost / LAN も許可します。userinfo・query string・fragment を含む URL は拒否します。
+秘密を path に埋め込まず、認証は環境変数を利用してください。
+`https://search.example.com/rustxng/` のような reverse proxy の path prefix を保持します。
+接続先とトークンはモデル用 schema、run description、エラー診断へ出力しません。
+
+通常の要求は `<base_url>/search` への **form POST**
+（`application/x-www-form-urlencoded`）で、次の4項目だけを送信します。
+
+- `q`: query。日本語・`&`・`+`・改行を form encoding で保持します。
+- `format=json`
+- `max_results`: 設定件数
+- `include_raw_content=0`
+
+`full=1`、`/research`、MCP、URL による本文取得は使いません。上流から `raw_content`、
+回答、スコア、巨大な内部 metadata が返ってもモデルへ転送しません。
+キーレスでも **query は RustXNG とその上流検索エンジンへ送信されます**。
+`runtime.network` は shell sandbox の設定であり、この通信を制御しません。
+`[tool].web_search = false` なら設定の読み残しがあっても接続せず、キー・実行ファイル・Docker は不要です。
+
+結果順を維持し、`query` / `results[].url` / nullable `title` / snippet の `content` へ正規化します。
+snippet は全文や検証済み回答ではありません。URL は 2048 文字以内の公開 HTTP(S) URL を
+構文検査し、不正な scheme・userinfo・制御文字・不正 port などは応答エラーにします。
+URL 自体を切り詰めることはなく、検索結果への DNS 問い合わせも行いません。
+既存 `web_fetch` の private address / DNS 検査は維持します。
+
+モデル向け title は500文字、snippet は4000文字までです。制御文字（改行・タブ以外）を除き、
+HTML 記号をエスケープした後に上限を適用します。query は JSON の ASCII エスケープ表現で
+16 KiB 以内、結果全体は provider / usage を含め `json.dumps(..., ensure_ascii=True)` で
+64 KiB 以内です。全体上限では末尾の結果から除去します。
+`provider_metadata.rustxng.truncated` は件数・title・snippet・metadata のいずれかを
+切り詰めた場合に `true` になります。engine 名は64文字以内、engine 一覧と障害一覧は各32件までです。
+
+`provider_metadata.rustxng.degraded` はエンジン障害を伴う検索で `true` になり、
+`unresponsive_engines` に engine 名・固定分類の reason・suspended を記録します。
+任意の上流エラー文は転送しません。正常な0件は空の `results`、0件かつ障害ありは
+`rustxng_search_unavailable` です。返却情報だけで全エンジン失敗とは断定しません。
+Timeout / CAPTCHA / rate limit 等は上流エンジンの状態として扱い、サーバー停止とは同一視しません。
+usage が未報告のため `usage = []` となり、実測ゼロ課金を生成しません。
+
+HTTP 応答は既存の **8 MiB** 制限を、Content-Length とストリーム読み込みの両方で検査します。
+redirect・retry・他 provider への fallback は行いません。TLS 検証は有効です。
+3xx / 401 / 403 / 429 / 5xx、HTML、壊れた JSON、不正な型、過大応答は構造化 tool error になります。
+認証・接続先・query・上流レスポンス本文を例外文にコピーしません。
+
+契約の確認基準は [RustXNG v0.26.0 handlers](https://github.com/sahenjp/RustXNG/blob/v0.26.0/src/web/handlers.rs)
+と [JSON serializer](https://github.com/sahenjp/RustXNG/blob/v0.26.0/src/web/feeds.rs) です。
+公開 v0.26.0 の既定ポートは8888ですが、後続 commit
+`188f778e0acf460dbdf5010413f3f0aac6877d14` の
+[導入手順](https://github.com/sahenjp/RustXNG/blob/188f778e0acf460dbdf5010413f3f0aac6877d14/docs/AGENT-SETUP.md)
+は29483を使用します。上の設定例のポートを推測で流用せず、運用者が `rustxng --version`、
+起動設定、必要なら対象サーバーの `/config` の `version` を確認し、実際の接続先を設定してください。
+Gear は確認のための自動 probe も行いません。
+[監査文書](https://github.com/sahenjp/RustXNG/blob/188f778e0acf460dbdf5010413f3f0aac6877d14/docs/AUDIT-2026-11-02.md)
+は旧 commit の調査であり、稼働版の修正済み保証として扱いません。
+通常テストはローカル HTTP fixture による契約検証です。実検索、検索品質、native / Docker の
+導入実測は今回の検証に含まず、明示 opt-in の後続検証で扱います。
 
 ### Exa Search / Contents
 

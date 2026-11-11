@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from gear_agent.config import ToolConfig, WebFetchConfig, WebSearchConfig
+from gear_agent.rustxng_config import RustXNGSearchConfig
 from gear_agent.errors import gear_error
 from gear_agent.tools.base import Tool
 from gear_agent.tools.filesystem import FileReadTool, FileWriteTool
@@ -19,7 +20,7 @@ from gear_agent.tools.providers.urls import resolve_public_host
 
 def build_configured_tools(
     config: ToolConfig,
-    web_search_config: WebSearchConfig | None,
+    web_search_config: WebSearchConfig | RustXNGSearchConfig | None,
     web_fetch_config: WebFetchConfig | None,
     workspace: Path,
     shell_runtime: ShellRuntime,

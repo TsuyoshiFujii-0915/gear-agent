@@ -10,7 +10,7 @@ from gear_agent.config import MAX_WEB_RESPONSE_BYTES
 
 
 class WebHttpClient:
-    """Bounded JSON HTTP with safe errors and no redirects or retries."""
+    """Bounded HTTP returning JSON with safe errors and no redirects or retries."""
 
     def __init__(self, client: httpx.Client, max_response_bytes: int) -> None:
         if isinstance(max_response_bytes, bool) or max_response_bytes < 1:
@@ -58,15 +58,44 @@ class WebHttpClient:
         Returns:
             Bounded JSON response object.
         """
+        request = self._client.build_request(
+            'POST', url, json=payload,
+            headers={**headers, 'Accept-Encoding': 'identity'},
+            timeout=timeout_seconds,
+        )
+        return self._send_json(request, timeout_seconds, origin, error_prefix)
+
+    def post_form(
+        self, url: str, headers: dict[str, str], payload: dict[str, str], timeout_seconds: int,
+        origin: str, error_prefix: str,
+    ) -> dict[str, Any]:
+        """Posts form fields through the same bounded JSON response policy.
+
+        Args:
+            url: Operator-configured fixed API endpoint.
+            headers: Explicit authentication, empty for keyless requests.
+            payload: Form fields encoded by HTTPX.
+            timeout_seconds: Explicit HTTP timeout.
+            origin: Tool identity for errors.
+            error_prefix: Provider error namespace.
+
+        Returns:
+            Parsed bounded JSON response object.
+        """
+        request = self._client.build_request(
+            'POST', url, data=payload,
+            headers={**headers, 'Accept-Encoding': 'identity'},
+            timeout=timeout_seconds,
+        )
+        return self._send_json(request, timeout_seconds, origin, error_prefix)
+
+    def _send_json(
+        self, request: httpx.Request, timeout_seconds: int, origin: str, error_prefix: str,
+    ) -> dict[str, Any]:
         def failure(category: str, message: str, details: dict[str, object]) -> GearError:
             return gear_error(f'{error_prefix}_{category}', message, origin, True, details)
 
         try:
-            request = self._client.build_request(
-                'POST', url, json=payload,
-                headers={**headers, 'Accept-Encoding': 'identity'},
-                timeout=timeout_seconds,
-            )
             response = self._client.send(request, stream=True, follow_redirects=False)
             try:
                 if not 200 <= response.status_code < 300:
