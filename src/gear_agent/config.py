@@ -7,6 +7,7 @@ from typing import Literal, Mapping, cast, get_args
 from urllib.parse import urlsplit
 import tomllib
 
+from gear_agent.rustxng_config import RustXNGSearchConfig, RustXNGSearchOptions, validate_rustxng_endpoint
 from gear_agent.errors import GearError, gear_error
 from gear_agent.treg_config import TregSearchOptions, TregFetchOptions
 from gear_agent.compaction_config import CompactionConfig, SUMMARY_COMPACTION, load_compaction_config
@@ -282,7 +283,7 @@ class AppConfig:
     model: ModelConfig
     runtime: RuntimeConfig
     tool: ToolConfig
-    web_search: WebSearchConfig | None
+    web_search: WebSearchConfig | RustXNGSearchConfig | None
     web_fetch: WebFetchConfig | None
     context_budget: ContextBudgetConfig = DISABLED_CONTEXT_BUDGET
     compaction: CompactionConfig = SUMMARY_COMPACTION
@@ -733,10 +734,12 @@ def _load_web_search_config(
     raw_data: dict[str, object],
     enabled: bool,
     environment: Mapping[str, str],
-) -> WebSearchConfig | None:
+) -> WebSearchConfig | RustXNGSearchConfig | None:
     if not enabled:
         return None
     table = _required_table(raw_data, "web_search")
+    if table.get("provider") == "rustxng":
+        return _load_rustxng_search_config(table, environment)
     if table.get("provider") == "exa":
         return _load_exa_search_config(table, environment)
     if table.get("provider") == "firecrawl":
@@ -772,6 +775,29 @@ def _load_web_search_config(
         api_key=_required_secret(api_key_env, environment, "web_search.api_key_env"),
         max_results=max_results, timeout_seconds=timeout, provider=provider, options=vendor,
     )
+
+
+def _load_rustxng_search_config(
+    table: dict[str, object], environment: Mapping[str, str],
+) -> RustXNGSearchConfig:
+    origin = "web_search"
+    _reject_unknown_keys(table, origin, {"provider", "api_key_env", "max_results", "timeout_seconds", "rustxng"})
+    options = _required_table(table, "rustxng")
+    _reject_unknown_keys(options, "web_search.rustxng", {"mode", "base_url"})
+    if _required_string(options, "mode", "web_search.rustxng") != "external":
+        raise gear_error("config_value_invalid", "web_search.rustxng.mode supports only external.",
+                         "config", True, {"origin": "web_search.rustxng.mode"})
+    endpoint = validate_rustxng_endpoint(_required_string(options, "base_url", "web_search.rustxng"))
+    limit = _required_int_in_range(table, "max_results", origin, 1, 200)
+    timeout = _required_int_in_range(table, "timeout_seconds", origin, 1, 300)
+    token = None
+    if "api_key_env" in table:
+        env_name = _required_string(table, "api_key_env", origin)
+        token = _required_secret(env_name, environment, "web_search.api_key_env")
+        if any(not 33 <= ord(char) <= 126 for char in token):
+            raise gear_error("config_value_invalid", "web_search.api_key_env requires a nonempty ASCII token without whitespace.",
+                             "config", True, {"origin": "web_search.api_key_env"})
+    return RustXNGSearchConfig(token, limit, timeout, "rustxng", RustXNGSearchOptions("external", endpoint))
 
 
 def _load_web_fetch_config(

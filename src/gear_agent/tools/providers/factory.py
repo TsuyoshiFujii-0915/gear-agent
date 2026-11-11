@@ -8,6 +8,8 @@ from gear_agent.config import (
     FirecrawlSearchOptions, FirecrawlFetchOptions, ExaSearchConfig, ExaFetchConfig,
 )
 from gear_agent.exa_config import ExaSearchOptions, ExaFetchOptions
+from gear_agent.rustxng_config import RustXNGSearchConfig
+from gear_agent.tools.providers.rustxng import RustXNGSearchProvider
 from gear_agent.errors import gear_error
 from gear_agent.tools.deepseek import DeepSeekTransport
 
@@ -23,7 +25,7 @@ from gear_agent.tools.providers.firecrawl_search import FirecrawlSearchProvider
 from gear_agent.tools.providers.firecrawl_fetch import FirecrawlFetchProvider
 
 
-def build_search_provider(config: WebSearchConfig) -> WebSearchProvider:
+def build_search_provider(config: WebSearchConfig | RustXNGSearchConfig) -> WebSearchProvider:
     """Builds only the configured, implemented search provider.
 
     Args:
@@ -32,6 +34,8 @@ def build_search_provider(config: WebSearchConfig) -> WebSearchProvider:
     Returns:
         Search adapter with a scoped production HTTP transport.
     """
+    if isinstance(config, RustXNGSearchConfig):
+        return RustXNGSearchProvider(config)
     if config.provider == 'treg' and isinstance(config.options, TregSearchOptions):
         return TregSearchAdapter(config)
     if config.provider == 'tavily' and isinstance(config.options, TavilySearchOptions):

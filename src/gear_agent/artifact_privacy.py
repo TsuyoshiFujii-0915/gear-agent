@@ -6,6 +6,7 @@ import json
 import re
 
 from gear_agent.config import AppConfig
+from gear_agent.rustxng_config import RustXNGSearchConfig
 from gear_agent.errors import GearError
 
 
@@ -64,6 +65,8 @@ class ArtifactPrivacy(CredentialRedactor):
             values.append(config.compaction.jev.api_key)
         if config.web_search is not None:
             values.append(config.web_search.api_key)
+            if isinstance(config.web_search, RustXNGSearchConfig):
+                values.append(config.web_search.options.base_url)
         if config.web_fetch is not None:
             values.append(config.web_fetch.api_key)
         super().__init__(config.model.url, values, environment)

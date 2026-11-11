@@ -9,6 +9,7 @@ from gear_agent.config import AppConfig
 from gear_agent.errors import GearError, safe_error_payload
 from gear_agent.model.replay import endpoint_identity
 from gear_agent.runtime import AgentRuntime
+from gear_agent.rustxng_config import RustXNGSearchConfig
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,8 @@ def describe_run(agent: AgentRuntime, session_id: str, prompt: TaskPrompt) -> Ru
     if config.web_search is not None:
         web_search = asdict(config.web_search)
         del web_search['api_key']
+        if isinstance(config.web_search, RustXNGSearchConfig):
+            del web_search['options']['base_url']
     web_fetch = None
     if config.web_fetch is not None:
         web_fetch = asdict(config.web_fetch)
@@ -184,6 +187,7 @@ def diagnostic_secrets(config: AppConfig) -> tuple[str, ...]:
     """
     return tuple(value for value in (
         config.model.url,
+        config.web_search.options.base_url if isinstance(config.web_search, RustXNGSearchConfig) else None,
         config.model.api_key,
         config.compaction.jev.api_key if config.compaction.jev is not None else None,
         config.web_search.api_key if config.web_search is not None else None,
